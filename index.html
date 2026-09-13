@@ -84,11 +84,17 @@
   /* 上格：箭頭 */
   #stage{flex:1 1 50%;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
   #arrow{height:88%;width:auto;aspect-ratio:1/1;max-width:92%;transition:transform .28s cubic-bezier(.2,.7,.3,1)}
-  #arrow path{fill:var(--ink)}
-  body.stale #arrow path{fill:#4a4a4a}
-  body.turn.stale #arrow path{fill:rgba(255,255,255,.45)}
+  /* 尖角導圓：用同色的粗描邊配 stroke-linejoin:round，圓角半徑即線寬的一半。
+     比在路徑裡手刻圓弧簡單得多，而且凹角（箭尾缺口）也會一併圓滑。 */
+  #arrow path{
+    fill:var(--ink);stroke:var(--ink);
+    stroke-width:9;stroke-linejoin:round;stroke-linecap:round;
+  }
+  #arrow .ret path{stroke-width:7}
+  body.stale #arrow path{fill:#4a4a4a;stroke:#4a4a4a}
+  body.turn.stale #arrow path{fill:rgba(255,255,255,.45);stroke:rgba(255,255,255,.45)}
   /* 紅屏上灰箭頭幾乎看不見，改用半透明白：仍表示方向不可靠，但讀得到 */
-  body.off.stale #arrow path{fill:rgba(255,255,255,.45)}
+  body.off.stale #arrow path{fill:rgba(255,255,255,.45);stroke:rgba(255,255,255,.45)}
   /* 循跡箭頭與「回到軌跡」箭頭是兩個不同圖形，紅屏下一眼可辨 */
   #arrow .ret{display:none}
   body.off #arrow .nav{display:none}
@@ -172,7 +178,7 @@
 <section id="start">
   <div>
     <h1>軌跡箭頭</h1>
-    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 90°±30° 的轉彎則轉暗藍並提示。</p>
+    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 60° 以上的轉彎則轉暗藍並提示。</p>
   </div>
   <div class="file">
     <input type="file" id="picker" accept=".gpx,application/gpx+xml,text/xml">
@@ -414,12 +420,12 @@ function polyline(d0, d1){
 // 在 40 m 視窗內只量到 46°，會被漏掉。必須先把彎當成一個完整的段落
 // 辨識出來（連續同向轉動的區段），再量它的總轉角。
 const TURN_SPAN     = 50;   // 彎起點需落在前方多少公尺內才提示
-// 目標範圍是 90°±30°，但平均弦線量測會系統性低估約 2–3°（實測 90° 量到
-// 88°、120° 量到 118°），因此門檻各外擴 3°，剛好 60° 與 120° 的折角才不會漏。
-const TURN_MIN      = 57;   // ≈ 90° − 30°
-const TURN_MAX      = 123;  // ≈ 90° + 30°
+// 下界目標 60°，平均弦線量測會系統性低估約 2–3°（實測 90° 量到
+// 88°、120° 量到 118°），因此下界外擴 3° 到 57°，60° 的折角才不會漏。
+const TURN_MIN      = 57;   // ≈ 60°（90° − 30°）
+const TURN_MAX      = 190;  // 髮夾彎與迴轉的總轉角更大，卻更需要提前知道，故不設實質上限
 const TURN_HOLD_MIN = 25;   // 已在彎中時放寬下限，避免轉到一半熄掉
-const TURN_HOLD_MAX = 150;
+const TURN_HOLD_MAX = 360;  // 已在彎中時不設上限
 const TURN_STEP     = 5;    // 取樣步長
 const TURN_CHORD    = 15;   // 計算方位的弦線半長（見 trackBearingAt）
 const TURN_STRAIGHT = 2.5;  // 每 5 m 轉不到此角度視為直行（≈ 半徑 115 m 以上）
