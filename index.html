@@ -235,8 +235,8 @@
 <!-- 設定 -->
 <section id="panel">
   <div class="row">
-    <label>偏離警告距離 <i><span id="thrV">40</span> m</i></label>
-    <input type="range" id="thr" min="10" max="150" step="5" value="40">
+    <label>偏離警告距離 <i><span id="thrV">25</span> m</i></label>
+    <input type="range" id="thr" min="10" max="150" step="5" value="25">
   </div>
   <div class="row">
     <label>箭頭前瞻距離 <i><span id="lkV">60</span> m</i></label>
@@ -316,7 +316,7 @@ const wrap180 = d => ((d + 540) % 360) - 180;
 const S = {
   raw: [], track: [], cum: [], total: 0,
   idx: 0, locked: false, rev: false,
-  thr: 40, look: 60, range: 100, sound: true, mapApp: true,
+  thr: 25, look: 60, range: 100, sound: true, mapApp: true,
   lane: 3, side: 0, smooth: 5, trace: [], hhist: [],
   gpsHead: null, gpsHeadAt: 0,
   compass: null,
@@ -349,9 +349,11 @@ const ctx = el.map.getContext('2d');
 
 /* ======================= 設定保存 ======================= */
 const PREF = 'gpsarrow.prefs';
+const PREF_V = 2;
 function savePrefs(){
   try {
     localStorage.setItem(PREF, JSON.stringify({
+      v:PREF_V,
       thr:S.thr, look:S.look, range:S.range, lane:S.lane, smooth:S.smooth,
       sound:S.sound, rev:S.rev, mapApp:S.mapApp
     }));
@@ -362,6 +364,11 @@ function loadPrefs(){
   try { p = JSON.parse(localStorage.getItem(PREF) || 'null'); } catch(e){}
   if (!p) return;
   if (Number.isFinite(p.thr))   S.thr   = clamp(p.thr, 10, 150);
+  // 只改預設值不會影響已經用過的裝置——設定一經保存就會蓋掉新預設。
+  // v1 的預設偏離門檻是 40 m，但市區平行的那條街常常就在 40 m 內，
+  // 整段騎錯路都不會叫，故改為 25 m。舊設定若正好停在當時的預設值，
+  // 視為「沒調過」而跟著改；自己調過的值一律不動。
+  if ((Number.isFinite(p.v) ? p.v : 1) < 2 && p.thr === 40) S.thr = 25;
   if (Number.isFinite(p.look))  S.look  = clamp(p.look, 20, 200);
   // 舊版存的是 100–500，超出新範圍的值靠攏到最接近的級距
   if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 200));
