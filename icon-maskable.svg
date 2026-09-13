@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#000000"/>
+  <!-- 安全區：maskable 圖示的內容需落在中央 80% 內 -->
+  <path d="M256 138 L384 382 L256 321 L128 382 Z" fill="#ffffff"/>
+</svg>

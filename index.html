@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="軌跡箭頭">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>軌跡箭頭</title>
+<style>
+  :root{
+    --ink:#ffffff;
+    --bg:#000000;
+    --dim:#6b6b6b;
+    --warn:#ffb000;
+    --alarm:#d40000;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden}
+  body{
+    background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    font-variant-numeric:tabular-nums;
+    display:flex;flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    transition:background-color .12s linear;
+  }
+  body.off{background:var(--alarm)}
+  body.off.pulse{background:#ff1a1a}
+
+  /* ---------- 起始畫面 ---------- */
+  #start{
+    position:fixed;inset:0;z-index:20;background:var(--bg);
+    display:flex;flex-direction:column;justify-content:center;gap:22px;
+    padding:32px;overflow-y:auto;
+  }
+  #start h1{font-size:26px;font-weight:600;letter-spacing:-.01em}
+  #start p{color:var(--dim);font-size:15px;line-height:1.6;max-width:34em}
+  #start.hide{display:none}
+  .file{
+    border:1px solid #333;border-radius:10px;padding:18px;
+    display:flex;flex-direction:column;gap:12px;
+  }
+  .file input{color:var(--dim);font-size:14px}
+  #status{font-size:14px;color:var(--warn);min-height:1.4em}
+  #dir{
+    display:none;align-items:center;justify-content:space-between;gap:12px;
+    border-top:1px solid #262626;padding-top:12px;
+  }
+  #dir.show{display:flex}
+  #dirText{font-size:13px;color:var(--dim);line-height:1.5;flex:1;min-width:0}
+  #dirText b{color:var(--ink);font-weight:600}
+  #revStart{
+    flex:0 0 auto;background:none;border:1px solid #333;color:var(--ink);
+    font-family:inherit;font-size:14px;border-radius:8px;padding:11px 14px;
+  }
+  #go{
+    background:var(--ink);color:#000;border:0;border-radius:10px;
+    padding:22px;font-size:21px;font-weight:650;font-family:inherit;
+  }
+  #go:disabled{background:#2a2a2a;color:#666}
+  #hint{font-size:13px}
+  #hint code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  /* ---------- 主畫面 ---------- */
+  .bar{
+    flex:0 0 auto;display:flex;justify-content:space-between;align-items:baseline;
+    padding:10px 20px 0;
+  }
+  .metric{display:flex;flex-direction:column;gap:2px}
+  .metric.r{align-items:flex-end}
+  .metric b{font-size:36px;font-weight:600;line-height:1;letter-spacing:-.02em}
+  .metric span{font-size:12px;color:var(--dim)}
+  body.off .metric span{color:rgba(255,255,255,.75)}
+
+  /* 上格：箭頭 */
+  #stage{flex:1 1 50%;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
+  #arrow{height:88%;width:auto;aspect-ratio:1/1;max-width:92%;transition:transform .28s cubic-bezier(.2,.7,.3,1)}
+  #arrow path{fill:var(--ink)}
+  body.stale #arrow path{fill:#4a4a4a}
+
+  #banner{
+    position:absolute;bottom:4%;left:0;right:0;text-align:center;
+    font-size:18px;font-weight:600;letter-spacing:.02em;
+  }
+
+  /* 下格：軌跡形狀 */
+  #mapWrap{
+    flex:1 1 50%;position:relative;min-height:0;
+    border-top:1px solid #1e1e1e;
+  }
+  body.off #mapWrap{border-top-color:rgba(255,255,255,.35)}
+  #map{display:block;width:100%;height:100%}
+  #mapTag{
+    position:absolute;top:6px;left:14px;font-size:11px;color:var(--dim);
+    letter-spacing:.04em;pointer-events:none;
+  }
+  body.off #mapTag{color:rgba(255,255,255,.8)}
+
+  .foot{
+    flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;
+    padding:8px 20px 12px;font-size:13px;color:var(--dim);
+  }
+  body.off .foot{color:rgba(255,255,255,.8)}
+  .foot button{
+    background:none;border:1px solid #333;color:inherit;font-family:inherit;
+    font-size:13px;border-radius:7px;padding:9px 14px;
+  }
+  body.off .foot button{border-color:rgba(255,255,255,.45)}
+
+  /* ---------- 設定 ---------- */
+  #panel{
+    position:fixed;inset:auto 0 0 0;z-index:15;background:#0c0c0c;
+    border-top:1px solid #262626;padding:22px 20px calc(22px + env(safe-area-inset-bottom));
+    display:none;flex-direction:column;gap:18px;max-height:86vh;overflow-y:auto;
+  }
+  #panel.show{display:flex}
+  .row{display:flex;flex-direction:column;gap:8px}
+  .row label{font-size:14px;color:var(--ink);display:flex;justify-content:space-between}
+  .row label i{font-style:normal;color:var(--dim)}
+  .row input[type=range]{width:100%;accent-color:#fff}
+  .toggles{display:flex;gap:10px;flex-wrap:wrap}
+  .toggles button{
+    flex:1;min-width:120px;background:none;border:1px solid #333;color:var(--ink);
+    font-family:inherit;font-size:14px;border-radius:8px;padding:13px;
+  }
+  .toggles button.on{background:var(--ink);color:#000;border-color:var(--ink)}
+</style>
+</head>
+<body class="stale">
+
+<!-- 起始畫面 -->
+<section id="start">
+  <div>
+    <h1>軌跡箭頭</h1>
+    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 100–500 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動。</p>
+  </div>
+  <div class="file">
+    <input type="file" id="picker" accept=".gpx,application/gpx+xml,text/xml">
+    <div id="status">請選擇 GPX 檔</div>
+    <div id="dir">
+      <div id="dirText"></div>
+      <button id="revStart">反轉</button>
+    </div>
+  </div>
+  <button id="go" disabled>開始</button>
+  <p id="hint">把 GPX 放在同一個資料夾，用 <code>?gpx=檔名.gpx</code> 開啟就會自動載入。</p>
+</section>
+
+<!-- 主畫面 -->
+<div class="bar">
+  <div class="metric"><b id="dev">–</b><span id="devLabel">偏離 公尺</span></div>
+  <div class="metric r"><b id="spd">–</b><span>km/h</span></div>
+</div>
+
+<div id="stage">
+  <svg id="arrow" viewBox="0 0 100 100" aria-hidden="true">
+    <path d="M50 6 L88 78 L50 60 L12 78 Z"/>
+  </svg>
+  <div id="banner"></div>
+</div>
+
+<div id="mapWrap">
+  <canvas id="map"></canvas>
+  <div id="mapTag">前方 200 m</div>
+</div>
+
+<div class="foot">
+  <div id="remain">剩餘 –</div>
+  <button id="gear">設定</button>
+</div>
+
+<!-- 設定 -->
+<section id="panel">
+  <div class="row">
+    <label>偏離警告距離 <i><span id="thrV">40</span> m</i></label>
+    <input type="range" id="thr" min="10" max="150" step="5" value="40">
+  </div>
+  <div class="row">
+    <label>箭頭前瞻距離 <i><span id="lkV">60</span> m</i></label>
+    <input type="range" id="lk" min="20" max="200" step="10" value="60">
+  </div>
+  <div class="row">
+    <label>下格顯示範圍 <i><span id="rgV">200</span> m</i></label>
+    <input type="range" id="rg" min="100" max="500" step="50" value="200">
+  </div>
+  <div class="toggles">
+    <button id="snd" class="on">警告音 開</button>
+    <button id="rev">反轉軌跡方向</button>
+  </div>
+  <div class="toggles">
+    <button id="resync">重新定位到軌跡</button>
+    <button id="close">關閉</button>
+  </div>
+</section>
+
+<script>
+(() => {
+'use strict';
+
+/* ======================= 幾何 ======================= */
+const R = 6371000, D2R = Math.PI/180;
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+function haversine(a, b){
+  const dphi = (b.lat-a.lat)*D2R, dlam = (b.lon-a.lon)*D2R;
+  const p1 = a.lat*D2R, p2 = b.lat*D2R;
+  const h = Math.sin(dphi/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dlam/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+// 以 ref 為原點的平面近似（公尺），短距離誤差可忽略
+function proj(p, ref){
+  return {
+    x: (p.lon-ref.lon)*D2R*Math.cos(ref.lat*D2R)*R,
+    y: (p.lat-ref.lat)*D2R*R
+  };
+}
+function bearing(a, b){
+  const p1 = a.lat*D2R, p2 = b.lat*D2R, dlam = (b.lon-a.lon)*D2R;
+  const y = Math.sin(dlam)*Math.cos(p2);
+  const x = Math.cos(p1)*Math.sin(p2) - Math.sin(p1)*Math.cos(p2)*Math.cos(dlam);
+  return (Math.atan2(y,x)/D2R + 360) % 360;
+}
+const wrap180 = d => ((d + 540) % 360) - 180;
+
+/* ======================= 狀態 ======================= */
+const S = {
+  raw: [], track: [], cum: [], total: 0,
+  idx: 0, locked: false, rev: false,
+  thr: 40, look: 60, range: 200, sound: true,
+  gpsHead: null, gpsHeadAt: 0,
+  compass: null,
+  pos: null, posAt: 0, speed: 0,
+  off: false, lastBeep: 0, offRuns: 0,
+  shown: 0,
+  near: null, along: 0, mapHead: 0
+};
+
+const $ = id => document.getElementById(id);
+const el = {
+  start:$('start'), picker:$('picker'), status:$('status'), go:$('go'),
+  dir:$('dir'), dirText:$('dirText'),
+  dev:$('dev'), devLabel:$('devLabel'), spd:$('spd'), arrow:$('arrow'),
+  banner:$('banner'), remain:$('remain'), panel:$('panel'),
+  map:$('map'), mapTag:$('mapTag'), hint:$('hint')
+};
+const ctx = el.map.getContext('2d');
+
+/* ======================= 設定保存 ======================= */
+const PREF = 'gpsarrow.prefs';
+function savePrefs(){
+  try {
+    localStorage.setItem(PREF, JSON.stringify({
+      thr:S.thr, look:S.look, range:S.range, sound:S.sound, rev:S.rev
+    }));
+  } catch(e){}
+}
+function loadPrefs(){
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem(PREF) || 'null'); } catch(e){}
+  if (!p) return;
+  if (Number.isFinite(p.thr))   S.thr   = clamp(p.thr, 10, 150);
+  if (Number.isFinite(p.look))  S.look  = clamp(p.look, 20, 200);
+  if (Number.isFinite(p.range)) S.range = clamp(p.range, 100, 500);
+  if (typeof p.sound === 'boolean') S.sound = p.sound;
+  if (typeof p.rev === 'boolean')   S.rev   = p.rev;
+}
+
+/* ======================= GPX ======================= */
+// GPX 沒有「方向」欄位，點的排列順序本身就是方向：
+// 第一個 trkpt 是起點、最後一個是終點。反轉＝把順序倒過來。
+function parseGPX(text){
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('GPX 格式解析失敗');
+  let nodes = [...doc.getElementsByTagName('trkpt')];
+  if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
+  if (!nodes.length) nodes = [...doc.getElementsByTagName('wpt')];
+  const pts = nodes.map(n => ({
+    lat: parseFloat(n.getAttribute('lat')),
+    lon: parseFloat(n.getAttribute('lon'))
+  })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  if (pts.length < 2) throw new Error('軌跡點不足兩個');
+  return pts;
+}
+function loadTrack(pts){
+  S.track = pts;
+  S.cum = [0];
+  for (let i=1; i<pts.length; i++) S.cum[i] = S.cum[i-1] + haversine(pts[i-1], pts[i]);
+  S.total = S.cum[S.cum.length-1];
+  S.idx = 0; S.locked = false; S.near = null; S.along = 0;
+}
+// 原始點序另外保存，反轉可以無限次來回切換而不失真
+function setTrack(pts){ S.raw = pts; applyDirection(); }
+function applyDirection(){
+  loadTrack(S.rev ? S.raw.slice().reverse() : S.raw.slice());
+}
+// 起點→終點的直線方位，用文字描述給使用者確認方向對不對
+const COMPASS16 = ['北','北北東','東北','東北東','東','東南東','東南','南南東',
+                   '南','南南西','西南','西南西','西','西北西','西北','北北西'];
+function compassName(deg){ return COMPASS16[Math.round(((deg%360)+360)%360 / 22.5) % 16]; }
+
+/* ======================= 軌跡比對 ======================= */
+// 回傳距離最近的線段投影點
+function nearestOnTrack(pos, from, to){
+  let best = {d:Infinity, i:from, t:0};
+  for (let i=from; i<to; i++){
+    const A = proj(S.track[i], pos), B = proj(S.track[i+1], pos);
+    const dx = B.x-A.x, dy = B.y-A.y, L2 = dx*dx + dy*dy;
+    let t = L2 > 0 ? (-(A.x*dx + A.y*dy))/L2 : 0;
+    t = clamp(t, 0, 1);
+    const d = Math.hypot(A.x + t*dx, A.y + t*dy);
+    if (d < best.d) best = {d, i, t};
+  }
+  return best;
+}
+function idxAt(dist){
+  const d = clamp(dist, 0, S.total);
+  let lo = 0, hi = S.cum.length-1;
+  while (lo < hi-1){
+    const mid = (lo+hi) >> 1;
+    if (S.cum[mid] <= d) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+// 依累積里程取軌跡上的點（線性內插）
+function pointAt(dist){
+  const d = clamp(dist, 0, S.total);
+  const lo = idxAt(d), hi = lo+1;
+  const seg = S.cum[hi] - S.cum[lo];
+  const t = seg > 0 ? (d - S.cum[lo]) / seg : 0;
+  return {
+    lat: S.track[lo].lat + t*(S.track[hi].lat - S.track[lo].lat),
+    lon: S.track[lo].lon + t*(S.track[hi].lon - S.track[lo].lon)
+  };
+}
+// 取 [d0,d1] 區間的實際折線頂點，端點以內插補齊（保留真實轉角）
+function polyline(d0, d1){
+  const a = clamp(d0, 0, S.total), b = clamp(d1, 0, S.total);
+  if (b <= a) return [];
+  const out = [pointAt(a)];
+  for (let i = idxAt(a)+1; i < S.cum.length && S.cum[i] < b; i++) out.push(S.track[i]);
+  out.push(pointAt(b));
+  return out;
+}
+
+/* ======================= 感測 ======================= */
+function onPosition(p){
+  const c = p.coords;
+  S.pos = {lat:c.latitude, lon:c.longitude};
+  S.posAt = Date.now();
+  S.speed = Number.isFinite(c.speed) && c.speed >= 0 ? c.speed : 0;
+  // 騎乘中 GPS 航向遠比電子羅盤可靠（車把上的手機受金屬與震動干擾）
+  if (Number.isFinite(c.heading) && S.speed > 1.2){
+    S.gpsHead = c.heading; S.gpsHeadAt = S.posAt;
+  }
+  update();
+}
+function heading(){
+  if (S.gpsHead !== null && Date.now() - S.gpsHeadAt < 8000) return S.gpsHead;
+  if (S.compass !== null) return S.compass;
+  return null;
+}
+function onOrient(e){
+  if (typeof e.webkitCompassHeading === 'number') S.compass = e.webkitCompassHeading;
+  else if (e.absolute && typeof e.alpha === 'number') S.compass = (360 - e.alpha) % 360;
+}
+function initCompass(){
+  const DOE = window.DeviceOrientationEvent;
+  if (!DOE) return;
+  const attach = () => {
+    window.addEventListener('deviceorientationabsolute', onOrient, true);
+    window.addEventListener('deviceorientation', onOrient, true);
+  };
+  if (typeof DOE.requestPermission === 'function'){
+    DOE.requestPermission().then(s => { if (s === 'granted') attach(); }).catch(()=>{});
+  } else attach();
+}
+
+/* ======================= 警告 ======================= */
+let audio = null;
+function ac(){
+  if (!audio){
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    audio = new C();
+  }
+  if (audio.state === 'suspended') audio.resume();
+  return audio;
+}
+// 借使用者手勢解鎖 iOS 音訊，但不發出聲音
+function unlockAudio(){
+  try {
+    const a = ac(); if (!a) return;
+    const o = a.createOscillator(), g = a.createGain();
+    g.gain.value = 0;
+    o.connect(g); g.connect(a.destination);
+    o.start(); o.stop(a.currentTime + 0.02);
+  } catch(e){}
+}
+function beep(){
+  if (!S.sound) return;
+  try {
+    const a = ac(); if (!a) return;
+    const t = a.currentTime;
+    [0, 0.22].forEach(delay => {
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = 'square'; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, t+delay);
+      g.gain.exponentialRampToValueAtTime(0.35, t+delay+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+delay+0.16);
+      o.connect(g); g.connect(a.destination);
+      o.start(t+delay); o.stop(t+delay+0.18);
+    });
+  } catch(e){}
+}
+function alarm(){
+  const now = Date.now();
+  // 持續偏離時逐次拉長間隔：8s → 16s → 32s → 60s（刻意繞路不會一直震）
+  const gap = Math.min(8000 * Math.pow(2, Math.max(0, S.offRuns-1)), 60000);
+  if (S.offRuns > 0 && now - S.lastBeep < gap) return;
+  S.lastBeep = now;
+  S.offRuns++;
+  beep();
+  if (navigator.vibrate) navigator.vibrate([180, 90, 180]);
+  document.body.classList.add('pulse');
+  setTimeout(() => document.body.classList.remove('pulse'), 260);
+}
+
+/* ======================= 下格：軌跡形狀 ======================= */
+function sizeMap(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = el.map.clientWidth, h = el.map.clientHeight;
+  if (!w || !h) return;
+  el.map.width = Math.round(w*dpr);
+  el.map.height = Math.round(h*dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawMap();
+}
+function drawMap(){
+  const W = el.map.clientWidth, H = el.map.clientHeight;
+  if (!W || !H) return;
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = '11px system-ui, -apple-system, sans-serif';
+
+  if (!S.track.length || !S.pos || !S.near){
+    ctx.fillStyle = '#4a4a4a';
+    ctx.textAlign = 'center';
+    ctx.fillText(S.track.length ? '等待定位' : '尚未載入軌跡', W/2, H/2);
+    return;
+  }
+
+  const rng = S.range;
+  const cx = W/2, cy = H*0.80;              // 騎士固定在下方，前方視野較大
+  const scale = (H*0.76) / rng;
+  const hr = S.mapHead * D2R, sh = Math.sin(hr), ch = Math.cos(hr);
+  // 前進方向朝上：f 為前方分量、r 為右側分量
+  const toScreen = p => {
+    const q = proj(p, S.pos);
+    return [cx + (q.x*ch - q.y*sh)*scale, cy - (q.x*sh + q.y*ch)*scale];
+  };
+  const stroke = (pts, color, width, dash) => {
+    if (pts.length < 2) return;
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const s = toScreen(p);
+      i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]);
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = width;
+    ctx.lineJoin = ctx.lineCap = 'round';
+    ctx.setLineDash(dash || []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  const onRed = S.off;
+
+  // 距離刻度
+  ctx.strokeStyle = onRed ? 'rgba(255,255,255,.28)' : '#242424';
+  ctx.fillStyle   = onRed ? 'rgba(255,255,255,.7)'  : '#555';
+  ctx.textAlign = 'right';   // 靠右，避開左上角的「前方 N m」標籤
+  ctx.lineWidth = 1;
+  [rng/2, rng].forEach(d => {
+    const y = cy - d*scale;
+    if (y < 2) return;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath(); ctx.moveTo(8, y); ctx.lineTo(W-8, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText(Math.round(d) + ' m', W-10, y - 4);
+  });
+
+  // 偏離門檻圈
+  ctx.strokeStyle = onRed ? 'rgba(255,255,255,.45)' : '#333';
+  ctx.setLineDash([2, 4]);
+  ctx.beginPath(); ctx.arc(cx, cy, S.thr*scale, 0, Math.PI*2); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 走過的一段（暗）與前方一段（亮）
+  stroke(polyline(S.along - rng*0.5, S.along), onRed ? 'rgba(255,255,255,.4)' : '#3a3a3a', 3);
+  stroke(polyline(S.along, S.along + rng*1.25), '#ffffff', 4);
+
+  // 起點（空心方塊）與終點（雙圈），只在進入視野範圍時畫
+  const mark = (p, kind) => {
+    const s = toScreen(p);
+    if (s[0] < -40 || s[0] > W+40 || s[1] < -40 || s[1] > H+40) return;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    if (kind === 'start'){
+      ctx.strokeRect(s[0]-5, s[1]-5, 10, 10);
+    } else {
+      ctx.beginPath(); ctx.arc(s[0], s[1], 8, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(s[0], s[1], 3.5, 0, Math.PI*2); ctx.stroke();
+    }
+    ctx.textAlign = 'center';
+    ctx.fillStyle = onRed ? 'rgba(255,255,255,.9)' : '#bbb';
+    ctx.fillText(kind === 'start' ? '起' : '終', s[0], s[1] - 12);
+  };
+  if (S.along < rng*0.5) mark(S.track[0], 'start');
+  if (S.total - S.along < rng*1.25) mark(S.track[S.track.length-1], 'end');
+
+  // 偏離時，畫一條指回最近軌跡點的線
+  if (onRed){
+    const n = toScreen(pointAt(S.along));
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(n[0], n[1]); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 騎士
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy-8); ctx.lineTo(cx+6, cy+7); ctx.lineTo(cx, cy+3); ctx.lineTo(cx-6, cy+7);
+  ctx.closePath(); ctx.fill();
+}
+
+/* ======================= 主迴圈 ======================= */
+function setArrow(deg){
+  // 轉到最近的等效角度，避免 359→1 時整圈迴轉
+  const delta = wrap180(deg - S.shown);
+  S.shown += delta;
+  el.arrow.style.transform = `rotate(${S.shown}deg)`;
+}
+
+function update(){
+  if (!S.pos || !S.track.length) { drawMap(); return; }
+
+  // 搜尋範圍：沿軌跡前後各一段，避免折返路段誤吸到別的地方
+  let from, to;
+  if (!S.locked){ from = 0; to = S.track.length-1; }
+  else {
+    const here = S.cum[S.idx];
+    from = idxAt(here - 400); to = idxAt(here + 1500);
+  }
+  const near = nearestOnTrack(S.pos, from, Math.max(from+1, to));
+  // 離軌太遠代表可能整段跑掉，下一輪重新全域搜尋
+  S.locked = near.d < 300;
+  S.idx = near.i;
+  S.near = near;
+
+  const segLen = S.cum[near.i+1] - S.cum[near.i];
+  const along = S.cum[near.i] + near.t * segLen;
+  S.along = along;
+  const remain = Math.max(0, S.total - along);
+  const h = heading();
+
+  // 偏離判定
+  const off = near.d > S.thr;
+  if (!off || (off && !S.off)) S.offRuns = 0;   // 重新偏離：第一聲立刻響
+  S.off = off;
+  document.body.classList.toggle('off', off);
+
+  // 箭頭目標：在軌上看前瞻點，離軌時直接指回最近點
+  let target;
+  if (off) target = pointAt(along);
+  else {
+    const look = clamp(S.speed * 6, S.look * 0.6, S.look * 2.2);
+    target = pointAt(along + Math.max(S.look, look));
+  }
+
+  document.body.classList.toggle('stale', h === null);
+  if (h !== null && haversine(S.pos, target) > 3){
+    setArrow(wrap180(bearing(S.pos, target) - h));
+  }
+  // 沒有航向時，下格改以軌跡本身的行進方向朝上，形狀仍然可讀
+  S.mapHead = h !== null ? h
+    : bearing(pointAt(Math.max(0, along-5)), pointAt(Math.min(S.total, along+15)));
+
+  // 讀數
+  el.dev.textContent = Math.round(near.d);
+  el.devLabel.textContent = off ? '偏離 公尺 — 回到軌跡' : '偏離 公尺';
+  el.spd.textContent = (S.speed * 3.6).toFixed(1);
+  el.remain.textContent = remain > 1000
+    ? `剩餘 ${(remain/1000).toFixed(1)} km`
+    : `剩餘 ${Math.round(remain)} m`;
+
+  if (h === null) el.banner.textContent = '等待方向：先往前騎一段';
+  else if (off) { el.banner.textContent = '偏離軌跡'; alarm(); }
+  else if (remain < 25) el.banner.textContent = '抵達終點';
+  else el.banner.textContent = '';
+
+  drawMap();
+}
+
+/* ======================= 啟動 ======================= */
+let wakeLock = null;
+async function keepAwake(){
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && el.start.classList.contains('hide')) keepAwake();
+});
+window.addEventListener('resize', sizeMap);
+window.addEventListener('orientationchange', () => setTimeout(sizeMap, 250));
+
+function describeDirection(){
+  if (!S.track.length){ el.dir.classList.remove('show'); return; }
+  const a = S.track[0], b = S.track[S.track.length-1];
+  const loop = haversine(a, b) < 100;
+  const brg = bearing(a, b);
+  el.dirText.innerHTML = loop
+    ? `環狀路線（起訖點相距 ${Math.round(haversine(a,b))} m）。目前行進方向：<b>${S.rev ? '反向（逆原始點序）' : '正向（依原始點序）'}</b>`
+    : `起點 → 終點：朝 <b>${compassName(brg)}</b>（${Math.round(brg)}°）。目前：<b>${S.rev ? '反向' : '正向'}</b>`;
+  el.dir.classList.add('show');
+}
+function ready(n){
+  el.status.textContent = `已載入 ${n} 個軌跡點，總長 ${(S.total/1000).toFixed(1)} km`;
+  el.status.style.color = '#8fdc8f';
+  el.go.disabled = false;
+  describeDirection();
+}
+function fail(msg){
+  el.status.textContent = msg;
+  el.status.style.color = '#ffb000';
+  el.go.disabled = true;
+  el.dir.classList.remove('show');
+}
+el.picker.addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try { setTrack(parseGPX(r.result)); ready(S.track.length); }
+    catch(err){ fail(err.message); }
+  };
+  r.readAsText(f);
+});
+
+// ?gpx=route.gpx 自動載入（file:// 下瀏覽器會擋 fetch，必須用 http 伺服器或 Pages）
+const qs = new URLSearchParams(location.search).get('gpx');
+if (qs){
+  if (location.protocol === 'file:'){
+    fail('用 file:// 開啟時無法自動載入 GPX（瀏覽器安全限制），請改用 GitHub Pages／本機 http 伺服器，或直接在上面選檔。');
+  } else {
+    fetch(qs).then(r => { if(!r.ok) throw new Error('讀不到 ' + qs); return r.text(); })
+      .then(t => { setTrack(parseGPX(t)); ready(S.track.length); })
+      .catch(err => fail(err.message));
+  }
+}
+if (location.protocol === 'file:'){
+  el.hint.innerHTML = '目前是用 <code>file://</code> 開啟：<code>?gpx=</code> 自動載入與離線快取都不會生效，請改用 GitHub Pages 或本機 http 伺服器。';
+}
+
+el.go.addEventListener('click', () => {
+  el.start.classList.add('hide');
+  initCompass();
+  unlockAudio();                            // 借這次點擊解鎖 iOS 音訊（不出聲）
+  keepAwake();
+  sizeMap();
+  navigator.geolocation.watchPosition(onPosition, err => {
+    el.banner.textContent = '定位失敗：' + err.message;
+  }, {enableHighAccuracy:true, maximumAge:1000, timeout:15000});
+});
+
+/* 方向反轉（起始畫面與設定面板共用同一個可逆開關） */
+function toggleDirection(){
+  S.rev = !S.rev;
+  if (S.raw.length) applyDirection();
+  S.shown = 0;
+  el.arrow.style.transform = 'rotate(0deg)';
+  syncDirButtons();
+  describeDirection();
+  savePrefs();
+  update();
+}
+function syncDirButtons(){
+  $('rev').classList.toggle('on', S.rev);
+  $('rev').textContent = S.rev ? '軌跡方向：反向' : '軌跡方向：正向';
+  $('revStart').textContent = S.rev ? '改回正向' : '反轉';
+}
+$('revStart').addEventListener('click', toggleDirection);
+$('rev').addEventListener('click', () => { toggleDirection(); el.panel.classList.remove('show'); });
+
+/* 設定 */
+$('gear').addEventListener('click', () => el.panel.classList.add('show'));
+$('close').addEventListener('click', () => el.panel.classList.remove('show'));
+$('thr').addEventListener('input', e => { S.thr = +e.target.value; $('thrV').textContent = S.thr; savePrefs(); update(); });
+$('lk').addEventListener('input', e => { S.look = +e.target.value; $('lkV').textContent = S.look; savePrefs(); update(); });
+$('rg').addEventListener('input', e => {
+  S.range = +e.target.value; $('rgV').textContent = S.range;
+  el.mapTag.textContent = `前方 ${S.range} m`;
+  savePrefs(); update();
+});
+$('snd').addEventListener('click', e => {
+  S.sound = !S.sound;
+  e.currentTarget.classList.toggle('on', S.sound);
+  e.currentTarget.textContent = S.sound ? '警告音 開' : '警告音 關';
+  savePrefs();
+});
+$('resync').addEventListener('click', () => { S.locked = false; el.panel.classList.remove('show'); update(); });
+
+/* 套用已保存的設定 */
+loadPrefs();
+$('thr').value = S.thr;   $('thrV').textContent = S.thr;
+$('lk').value  = S.look;  $('lkV').textContent  = S.look;
+$('rg').value  = S.range; $('rgV').textContent  = S.range;
+el.mapTag.textContent = `前方 ${S.range} m`;
+$('snd').classList.toggle('on', S.sound);
+$('snd').textContent = S.sound ? '警告音 開' : '警告音 關';
+syncDirButtons();
+sizeMap();
+
+/* 離線 */
+if ('serviceWorker' in navigator && location.protocol !== 'file:'){
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+
+})();
+</script>
+</body>
+</html>
