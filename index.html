@@ -84,8 +84,9 @@
   /* 上格：箭頭 */
   #stage{flex:1 1 50%;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
   #arrow{height:88%;width:auto;aspect-ratio:1/1;max-width:92%;transition:transform .28s cubic-bezier(.2,.7,.3,1)}
-  /* 尖角導圓：用同色的粗描邊配 stroke-linejoin:round，圓角半徑即線寬的一半。
-     比在路徑裡手刻圓弧簡單得多，而且凹角（箭尾缺口）也會一併圓滑。 */
+  /* 尖角導圓：用同色的粗描邊配 stroke-linejoin:round，圓角半徑即線寬的一半，
+     比在路徑裡手刻圓弧簡單得多。注意只有凸角會被圓化——箭尾的 V 形凹角
+     反而會被描邊撐得更尖，要圓化它得改路徑本身。 */
   #arrow path{
     fill:var(--ink);stroke:var(--ink);
     stroke-width:9;stroke-linejoin:round;stroke-linecap:round;
