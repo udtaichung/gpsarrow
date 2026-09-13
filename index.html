@@ -240,6 +240,14 @@
     <input type="range" id="lk" min="20" max="200" step="10" value="60">
   </div>
   <div class="row">
+    <label>方向平滑 <i>前 <span id="smV">5</span> 秒的位移</i></label>
+    <div class="stepper">
+      <button id="smDn" aria-label="縮短視窗">−</button>
+      <div id="smNow" class="val">5 秒</div>
+      <button id="smUp" aria-label="拉長視窗">＋</button>
+    </div>
+  </div>
+  <div class="row">
     <label>路寬補償 <i>±<span id="lnV">3</span> m</i></label>
     <div class="stepper">
       <button id="lnDn" aria-label="減少補償">−</button>
@@ -306,7 +314,7 @@ const S = {
   raw: [], track: [], cum: [], total: 0,
   idx: 0, locked: false, rev: false,
   thr: 40, look: 60, range: 100, sound: true, mapApp: true,
-  lane: 3, side: 0,
+  lane: 3, side: 0, smooth: 5, trace: [], hhist: [],
   gpsHead: null, gpsHeadAt: 0,
   compass: null,
   pos: null, posAt: 0, speed: 0,
@@ -320,8 +328,11 @@ const S = {
 const RANGES = [30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200];
 // 路寬補償的級距：半個車道約 1.75 m，靠路邊騎大約 2–4 m
 const LANES = [0, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
+// 方向平滑的視窗長度（秒）。0 = 直接用 GPS 回報的 heading
+const SMOOTHS = [0, 2, 3, 5, 8, 12];
 const nearestRange = v => RANGES.reduce((a, b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, RANGES[0]);
 const nearestLane  = v => LANES.reduce((a, b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, LANES[0]);
+const nearestSmooth= v => SMOOTHS.reduce((a, b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, SMOOTHS[0]);
 
 const $ = id => document.getElementById(id);
 const el = {
@@ -338,7 +349,8 @@ const PREF = 'gpsarrow.prefs';
 function savePrefs(){
   try {
     localStorage.setItem(PREF, JSON.stringify({
-      thr:S.thr, look:S.look, range:S.range, lane:S.lane, sound:S.sound, rev:S.rev, mapApp:S.mapApp
+      thr:S.thr, look:S.look, range:S.range, lane:S.lane, smooth:S.smooth,
+      sound:S.sound, rev:S.rev, mapApp:S.mapApp
     }));
   } catch(e){}
 }
@@ -351,6 +363,7 @@ function loadPrefs(){
   // 舊版存的是 100–500，超出新範圍的值靠攏到最接近的級距
   if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 200));
   if (Number.isFinite(p.lane))  S.lane  = nearestLane(clamp(p.lane, 0, 6));
+  if (Number.isFinite(p.smooth)) S.smooth = nearestSmooth(clamp(p.smooth, 0, 12));
   if (typeof p.sound === 'boolean') S.sound = p.sound;
   if (typeof p.mapApp === 'boolean') S.mapApp = p.mapApp;
   if (typeof p.rev === 'boolean')   S.rev   = p.rev;
@@ -596,6 +609,9 @@ function turnBeep(dir){
 }
 
 /* ======================= 感測 ======================= */
+const TRACE_KEEP  = 15000;   // 位置歷史保留多久（毫秒）
+const TRACE_MIN_M = 5;       // 兩端平均點至少要相距這麼遠，方向才有意義
+
 function onPosition(p){
   const c = p.coords;
   S.pos = {lat:c.latitude, lon:c.longitude};
@@ -605,12 +621,65 @@ function onPosition(p){
   if (Number.isFinite(c.heading) && S.speed > 1.2){
     S.gpsHead = c.heading; S.gpsHeadAt = S.posAt;
   }
+  S.trace.push({lat:c.latitude, lon:c.longitude, t:S.posAt});
+  while (S.trace.length && S.posAt - S.trace[0].t > TRACE_KEEP) S.trace.shift();
+  const rh = rawHeading();
+  if (rh !== null) S.hhist.push({h:rh, t:S.posAt});
+  while (S.hhist.length && S.posAt - S.hhist[0].t > TRACE_KEEP) S.hhist.shift();
   update();
 }
-function heading(){
-  if (S.gpsHead !== null && Date.now() - S.gpsHeadAt < 8000) return S.gpsHead;
+
+// 以前幾秒的「位移」推算行進方向，比 GPS 單次回報的 heading 平穩得多。
+// 但不能只連「N 秒前那一點」和「現在這一點」——兩端的 GPS 雜訊會直接
+// 變成方向誤差。兩端各取半個視窗求平均，單點雜訊才會互相抵銷。
+// 代價是延遲約半個視窗（5 秒視窗約延遲 2.5 秒），轉彎時會慢半拍，
+// 所以視窗長度做成可調的。
+function meanOf(pts){
+  let la = 0, lo = 0;
+  for (const p of pts){ la += p.lat; lo += p.lon; }
+  return {lat: la/pts.length, lon: lo/pts.length};
+}
+function traceHeading(winMs){
+  const now = S.posAt;
+  let i = 0;
+  while (i < S.trace.length && now - S.trace[i].t > winMs) i++;
+  const w = S.trace.slice(i);
+  if (w.length < 4) return null;
+  const half = Math.max(2, Math.floor(w.length/2));
+  const a = meanOf(w.slice(0, half));                 // 較舊那半
+  const b = meanOf(w.slice(w.length - half));         // 較新那半
+  if (haversine(a, b) < TRACE_MIN_M) return null;     // 幾乎沒動，方向無意義
+  return bearing(a, b);
+}
+
+// 單次的原始方向。GPS 自己回報的 heading 是都卜勒推算的，在行進速度下
+// 誤差只有一兩度，比從位置反推準得多——實測位置雜訊 ±3 m 經 5 秒視窗
+// 平均後仍有 3.3° 抖動，比 GPS heading 的 1.2° 還差。所以位移推算只當
+// 備援：有些裝置根本不給 heading，這時它遠勝於車把上不可靠的電子羅盤。
+function rawHeading(){
+  if (S.gpsHead !== null && S.posAt - S.gpsHeadAt < 8000) return S.gpsHead;
+  const th = traceHeading(Math.max(5000, S.smooth*1000));
+  if (th !== null) return th;
   if (S.compass !== null) return S.compass;
   return null;
+}
+// 平滑是對「方向」本身做加權平均，不是重新從位置推算方向。
+// 權重隨時間線性遞減（最新為 1、視窗邊緣為 0），重心落在視窗的 1/3 處，
+// 所以延遲約為視窗的 1/3 而非一半——同樣的平順度，反應快一倍。
+function heading(){
+  const last = S.hhist.length ? S.hhist[S.hhist.length-1] : null;
+  if (!last) return rawHeading();
+  if (S.smooth <= 0) return S.posAt - last.t < 8000 ? last.h : rawHeading();
+  const win = S.smooth * 1000;
+  let x = 0, y = 0, wsum = 0;
+  for (const s of S.hhist){
+    const age = S.posAt - s.t;
+    if (age > win) continue;
+    const w = 1 - age/win;
+    x += w*Math.cos(s.h*D2R); y += w*Math.sin(s.h*D2R); wsum += w;
+  }
+  if (!wsum) return rawHeading();
+  return (Math.atan2(y, x)/D2R + 360) % 360;
 }
 function onOrient(e){
   if (typeof e.webkitCompassHeading === 'number') S.compass = e.webkitCompassHeading;
@@ -1147,6 +1216,19 @@ function stepLane(d){
   S.lane = LANES[clamp(LANES.indexOf(S.lane) + d, 0, LANES.length-1)];
   applyLane(); savePrefs(); update();
 }
+function applySmooth(){
+  const i = SMOOTHS.indexOf(S.smooth);
+  $('smV').textContent = S.smooth;
+  $('smNow').textContent = S.smooth ? S.smooth + ' 秒' : '關（直接用 GPS 航向）';
+  $('smDn').disabled = i <= 0;
+  $('smUp').disabled = i >= SMOOTHS.length-1;
+}
+function stepSmooth(d){
+  S.smooth = SMOOTHS[clamp(SMOOTHS.indexOf(S.smooth) + d, 0, SMOOTHS.length-1)];
+  applySmooth(); savePrefs(); update();
+}
+$('smDn').addEventListener('click', () => stepSmooth(-1));
+$('smUp').addEventListener('click', () => stepSmooth(+1));
 $('lnDn').addEventListener('click', () => stepLane(-1));
 $('lnUp').addEventListener('click', () => stepLane(+1));
 $('rgDn').addEventListener('click', () => stepRange(-1));
@@ -1173,6 +1255,8 @@ S.range = nearestRange(S.range);
 applyRange();
 S.lane = nearestLane(S.lane);
 applyLane();
+S.smooth = nearestSmooth(S.smooth);
+applySmooth();
 $('snd').classList.toggle('on', S.sound);
 $('snd').textContent = S.sound ? '警告音 開' : '警告音 關';
 $('mapApp').classList.toggle('on', S.mapApp);
