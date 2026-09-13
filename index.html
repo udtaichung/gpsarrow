@@ -18,6 +18,7 @@
     --dim:#6b6b6b;
     --warn:#ffb000;
     --alarm:#d40000;
+    --turn:#0b2f66;
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   html,body{height:100%;overflow:hidden}
@@ -29,6 +30,8 @@
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     transition:background-color .12s linear;
   }
+  /* 前方有轉彎：暗藍底。偏離（紅）優先，故 .off 規則排在後面覆蓋 */
+  body.turn{background:var(--turn)}
   body.off{background:var(--alarm)}
   body.off.pulse{background:#ff1a1a}
 
@@ -75,13 +78,15 @@
   .metric.r{align-items:flex-end}
   .metric b{font-size:36px;font-weight:600;line-height:1;letter-spacing:-.02em}
   .metric span{font-size:12px;color:var(--dim)}
-  body.off .metric span{color:rgba(255,255,255,.75)}
+  body.off .metric span,
+  body.turn .metric span{color:rgba(255,255,255,.75)}
 
   /* 上格：箭頭 */
   #stage{flex:1 1 50%;display:flex;align-items:center;justify-content:center;position:relative;min-height:0}
   #arrow{height:88%;width:auto;aspect-ratio:1/1;max-width:92%;transition:transform .28s cubic-bezier(.2,.7,.3,1)}
   #arrow path{fill:var(--ink)}
   body.stale #arrow path{fill:#4a4a4a}
+  body.turn.stale #arrow path{fill:rgba(255,255,255,.45)}
   /* 紅屏上灰箭頭幾乎看不見，改用半透明白：仍表示方向不可靠，但讀得到 */
   body.off.stale #arrow path{fill:rgba(255,255,255,.45)}
   /* 循跡箭頭與「回到軌跡」箭頭是兩個不同圖形，紅屏下一眼可辨 */
@@ -102,24 +107,28 @@
     flex:1 1 50%;position:relative;min-height:0;
     border-top:1px solid #1e1e1e;
   }
-  body.off #mapWrap{border-top-color:rgba(255,255,255,.35)}
+  body.off #mapWrap,
+  body.turn #mapWrap{border-top-color:rgba(255,255,255,.35)}
   #map{display:block;width:100%;height:100%}
   #mapTag{
     position:absolute;top:6px;left:14px;font-size:11px;color:var(--dim);
     letter-spacing:.04em;pointer-events:none;
   }
-  body.off #mapTag{color:rgba(255,255,255,.8)}
+  body.off #mapTag,
+  body.turn #mapTag{color:rgba(255,255,255,.8)}
 
   .foot{
     flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;
     padding:8px 20px 12px;font-size:13px;color:var(--dim);
   }
-  body.off .foot{color:rgba(255,255,255,.8)}
+  body.off .foot,
+  body.turn .foot{color:rgba(255,255,255,.8)}
   .foot button{
     background:none;border:1px solid #333;color:inherit;font-family:inherit;
     font-size:13px;border-radius:7px;padding:9px 14px;
   }
-  body.off .foot button{border-color:rgba(255,255,255,.45)}
+  body.off .foot button,
+  body.turn .foot button{border-color:rgba(255,255,255,.45)}
   .fbtns{display:flex;gap:8px}
   .foot button:disabled{opacity:.4}
   /* 偏離時「導航回軌跡」是當下最該按的鍵：反白突顯，並放大到戴手套、
@@ -163,7 +172,7 @@
 <section id="start">
   <div>
     <h1>軌跡箭頭</h1>
-    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動。</p>
+    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 90°±30° 的轉彎則轉暗藍並提示。</p>
   </div>
   <div class="file">
     <input type="file" id="picker" accept=".gpx,application/gpx+xml,text/xml">
@@ -279,6 +288,7 @@ const S = {
   compass: null,
   pos: null, posAt: 0, speed: 0,
   off: false, lastBeep: 0, offRuns: 0,
+  turn: null, lastTurnBeep: 0,
   shown: 0,
   near: null, along: 0, mapHead: 0
 };
@@ -393,6 +403,107 @@ function polyline(d0, d1){
   for (let i = idxAt(a)+1; i < S.cum.length && S.cum[i] < b; i++) out.push(S.track[i]);
   out.push(pointAt(b));
   return out;
+}
+
+/* ======================= 轉彎偵測 ======================= */
+// 不能看單一節點的轉角：密集 GPX 上一個 80 m 半徑的彎，每個節點只轉 2°，
+// 但整段轉了 90°。所以改看前方一段距離內的「累積轉向量」。
+// 方位本身也以 ±5 m 的弦線計算，避免 GPS 抖動造成的鋸齒被當成轉彎。
+// 只警示「真正的轉彎」：總轉角 90°±30°。
+// 關鍵是不能用固定長度的視窗量角度——一個 R=50 m 的 90° 彎弧長 78 m，
+// 在 40 m 視窗內只量到 46°，會被漏掉。必須先把彎當成一個完整的段落
+// 辨識出來（連續同向轉動的區段），再量它的總轉角。
+const TURN_SPAN     = 50;   // 彎起點需落在前方多少公尺內才提示
+// 目標範圍是 90°±30°，但平均弦線量測會系統性低估約 2–3°（實測 90° 量到
+// 88°、120° 量到 118°），因此門檻各外擴 3°，剛好 60° 與 120° 的折角才不會漏。
+const TURN_MIN      = 57;   // ≈ 90° − 30°
+const TURN_MAX      = 123;  // ≈ 90° + 30°
+const TURN_HOLD_MIN = 25;   // 已在彎中時放寬下限，避免轉到一半熄掉
+const TURN_HOLD_MAX = 150;
+const TURN_STEP     = 5;    // 取樣步長
+const TURN_CHORD    = 15;   // 計算方位的弦線半長（見 trackBearingAt）
+const TURN_STRAIGHT = 2.5;  // 每 5 m 轉不到此角度視為直行（≈ 半徑 115 m 以上）
+const TURN_GAP      = 3;    // 彎中容許連續 3 個取樣（15 m）接近直行
+const TURN_SCAN     = 200;  // 往前取樣總長，需容納得下整個彎
+
+// 實測的坑：GPX 是 GPS 錄的，本身就帶雜訊。用單一短弦線算方位時，
+// ±3 m 的橫向雜訊就會造成 ±30° 的方位誤差，直線路段誤報連連。
+// 改成兩側各取三點求平均後再連線，雜訊約降到 1/√3，直線段誤報歸零。
+const TURN_TAPS = [1, 0.66, 0.33];
+function meanPoint(d, sign){
+  let lat = 0, lon = 0;
+  for (const f of TURN_TAPS){
+    const p = pointAt(clamp(d + sign*f*TURN_CHORD, 0, S.total));
+    lat += p.lat; lon += p.lon;
+  }
+  return {lat: lat/TURN_TAPS.length, lon: lon/TURN_TAPS.length};
+}
+function trackBearingAt(d){
+  const a = meanPoint(d, -1), b = meanPoint(d, +1);
+  return haversine(a, b) < 1 ? null : bearing(a, b);
+}
+function turnAhead(from, holding){
+  if (S.total - from < 20) return null;
+  const minDeg = holding ? TURN_HOLD_MIN : TURN_MIN;
+  const maxDeg = holding ? TURN_HOLD_MAX : TURN_MAX;
+
+  // 沿軌跡取一排方位，差分得到每 5 m 的轉動量
+  const bs = [];
+  for (let k = 0; k <= Math.round(TURN_SCAN/TURN_STEP); k++){
+    const d = from + k*TURN_STEP;
+    bs.push(d > S.total ? null : trackBearingAt(d));
+  }
+  const dd = [];
+  for (let k = 0; k + 1 < bs.length; k++){
+    dd.push(bs[k] === null || bs[k+1] === null ? 0 : wrap180(bs[k+1] - bs[k]));
+  }
+
+  // 把連續同向轉動的取樣併成一個「彎」。中間容許短暫接近直行（TURN_GAP），
+  // 否則一個彎會被 GPS 抖動切成好幾段。
+  const runs = [];
+  let cur = null;
+  for (let k = 0; k < dd.length; k++){
+    const v = dd[k];
+    const s = Math.abs(v) < TURN_STRAIGHT ? 0 : Math.sign(v);
+    if (cur){
+      if (s === cur.s){ cur.sum += v; cur.gap = 0; }
+      else if (s === 0){ if (++cur.gap > TURN_GAP){ runs.push(cur); cur = null; } }
+      else { runs.push(cur); cur = {s, sum:v, start:k, gap:0}; }
+    } else if (s !== 0){
+      cur = {s, sum:v, start:k, gap:0};
+    }
+  }
+  if (cur) runs.push(cur);
+
+  // runs 已依距離排序，取最近且落在提示範圍內的那一個
+  for (const r of runs){
+    const dist = r.start*TURN_STEP;
+    if (dist > TURN_SPAN) break;
+    const a = Math.abs(r.sum);
+    if (a >= minDeg && a <= maxDeg){
+      return {deg: r.sum, dir: r.sum > 0 ? 'R' : 'L', dist};
+    }
+  }
+  return null;
+}
+// 轉彎提示音與偏離警告音刻意不同：正弦波、兩個音。
+// 右轉升調、左轉降調，不低頭也能分辨方向。
+function turnBeep(dir){
+  if (!S.sound) return;
+  try {
+    const a = ac(); if (!a) return;
+    const t = a.currentTime;
+    (dir === 'R' ? [620, 900] : [900, 620]).forEach((hz, i) => {
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = 'sine'; o.frequency.value = hz;
+      const at = t + i*0.17;
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.3, at+0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, at+0.15);
+      o.connect(g); g.connect(a.destination);
+      o.start(at); o.stop(at+0.17);
+    });
+  } catch(e){}
 }
 
 /* ======================= 感測 ======================= */
@@ -523,11 +634,12 @@ function drawMap(){
     ctx.stroke();
     ctx.setLineDash([]);
   };
-  const onRed = S.off;
+  const onRed = S.off;            // 回歸虛線等紅屏專屬元素
+  const tinted = S.off || !!S.turn;   // 深色背景（紅或藍）下的對比切換
 
   // 距離刻度
-  ctx.strokeStyle = onRed ? 'rgba(255,255,255,.28)' : '#242424';
-  ctx.fillStyle   = onRed ? 'rgba(255,255,255,.7)'  : '#555';
+  ctx.strokeStyle = tinted ? 'rgba(255,255,255,.28)' : '#242424';
+  ctx.fillStyle   = tinted ? 'rgba(255,255,255,.7)'  : '#555';
   ctx.textAlign = 'right';   // 靠右，避開左上角的「前方 N m」標籤
   ctx.lineWidth = 1;
   [rng/2, rng].forEach(d => {
@@ -542,14 +654,14 @@ function drawMap(){
   // 偏離門檻圈。門檻比視野還遠時（例如 30 m 視野配 40 m 門檻），圓圈
   // 整個落在格子外，畫出來只剩一道撐滿畫面的弧線，沒有資訊，此時不畫。
   if (S.thr < rng){
-    ctx.strokeStyle = onRed ? 'rgba(255,255,255,.45)' : '#333';
+    ctx.strokeStyle = tinted ? 'rgba(255,255,255,.45)' : '#333';
     ctx.setLineDash([2, 4]);
     ctx.beginPath(); ctx.arc(cx, cy, S.thr*scale, 0, Math.PI*2); ctx.stroke();
     ctx.setLineDash([]);
   }
 
   // 走過的一段（暗）與前方一段（亮）
-  stroke(polyline(S.along - rng*0.5, S.along), onRed ? 'rgba(255,255,255,.4)' : '#3a3a3a', 3);
+  stroke(polyline(S.along - rng*0.5, S.along), tinted ? 'rgba(255,255,255,.4)' : '#3a3a3a', 3);
   stroke(polyline(S.along, S.along + rng*1.25), '#ffffff', 4);
 
   // 起點（空心方塊）與終點（雙圈），只在進入視野範圍時畫
@@ -565,11 +677,28 @@ function drawMap(){
       ctx.beginPath(); ctx.arc(s[0], s[1], 3.5, 0, Math.PI*2); ctx.stroke();
     }
     ctx.textAlign = 'center';
-    ctx.fillStyle = onRed ? 'rgba(255,255,255,.9)' : '#bbb';
+    ctx.fillStyle = tinted ? 'rgba(255,255,255,.9)' : '#bbb';
     ctx.fillText(kind === 'start' ? '起' : '終', s[0], s[1] - 12);
   };
   if (S.along < rng*0.5) mark(S.track[0], 'start');
   if (S.total - S.along < rng*1.25) mark(S.track[S.track.length-1], 'end');
+
+  // 前方轉彎點：菱形標記 + 左右字樣
+  if (S.turn){
+    const tp = toScreen(pointAt(S.along + S.turn.dist));
+    if (tp[0] > -30 && tp[0] < W+30 && tp[1] > -30 && tp[1] < H+30){
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(tp[0], tp[1]-9); ctx.lineTo(tp[0]+9, tp[1]);
+      ctx.lineTo(tp[0], tp[1]+9); ctx.lineTo(tp[0]-9, tp[1]);
+      ctx.closePath(); ctx.fill();
+      // 標在轉彎的那一側，否則字會壓在軌跡線上看不清
+      const right = S.turn.dir === 'R';
+      ctx.textAlign = right ? 'left' : 'right';
+      ctx.fillStyle = 'rgba(255,255,255,.95)';
+      ctx.fillText(right ? '右' : '左', tp[0] + (right ? 15 : -15), tp[1] + 4);
+    }
+  }
 
   // 偏離時，畫一條指回最近軌跡點的線，並標上距離
   if (onRed){
@@ -660,6 +789,17 @@ function update(){
   S.off = off;
   document.body.classList.toggle('off', off);
 
+  // 前方轉彎：偏離時不提示（當下要處理的是回到軌跡，不是下一個彎）
+  const turn = off ? null : turnAhead(along, !!S.turn);
+  const turnRise = !!turn && !S.turn;   // 只在「剛偵測到」時響一次
+  S.turn = turn;
+  document.body.classList.toggle('turn', !!turn);
+  if (turnRise && Date.now() - S.lastTurnBeep > 6000){
+    S.lastTurnBeep = Date.now();
+    turnBeep(turn.dir);
+    if (navigator.vibrate) navigator.vibrate(90);
+  }
+
   // 箭頭目標：在軌上看前瞻點，離軌時直接指回最近點
   let target;
   if (off) target = pointAt(along);
@@ -697,6 +837,12 @@ function update(){
       ? `請掉頭 — 軌跡在後方 ${Math.round(near.d)} m`
       : `往箭頭方向回到軌跡 — ${Math.round(near.d)} m`;
     alarm();
+  }
+  else if (turn) {
+    const d = Math.round(turn.dist);
+    el.banner.textContent = (turn.dir === 'R' ? '右彎 ' : '左彎 ')
+      + (d < 5 ? '就在前方' : `${d} m`)
+      + `　${Math.abs(Math.round(turn.deg))}°`;
   }
   else if (remain < 25) el.banner.textContent = '抵達終點';
   else el.banner.textContent = '';
