@@ -432,6 +432,11 @@ const TURN_CHORD    = 15;   // 計算方位的弦線半長（見 trackBearingAt�
 const TURN_STRAIGHT = 2.5;  // 每 5 m 轉不到此角度視為直行（≈ 半徑 115 m 以上）
 const TURN_GAP      = 3;    // 彎中容許連續 3 個取樣（15 m）接近直行
 const TURN_SCAN     = 200;  // 往前取樣總長，需容納得下整個彎
+// 右轉標記的綠色：亮度 230（Rec.709 亮度 Y' = 0.2126R + 0.7152G + 0.0722B）。
+// 綠色分量開滿 255 只到 182，其餘由等量的 R/B 補足以維持純綠色相：
+//   0.2126×167 + 0.7152×255 + 0.0722×167 = 229.9
+// 左轉維持白色，兩者在暗藍底上都夠亮。
+const TURN_R_COLOR  = '#a7ffa7';
 
 // 實測的坑：GPX 是 GPS 錄的，本身就帶雜訊。用單一短弦線算方位時，
 // ±3 m 的橫向雜訊就會造成 ±30° 的方位誤差，直線路段誤報連連。
@@ -694,15 +699,15 @@ function drawMap(){
   if (S.turn){
     const tp = toScreen(pointAt(S.along + S.turn.dist));
     if (tp[0] > -30 && tp[0] < W+30 && tp[1] > -30 && tp[1] < H+30){
-      ctx.fillStyle = '#ffffff';
+      const right = S.turn.dir === 'R';
+      ctx.fillStyle = right ? TURN_R_COLOR : '#ffffff';
       ctx.beginPath();
       ctx.moveTo(tp[0], tp[1]-9); ctx.lineTo(tp[0]+9, tp[1]);
       ctx.lineTo(tp[0], tp[1]+9); ctx.lineTo(tp[0]-9, tp[1]);
       ctx.closePath(); ctx.fill();
       // 標在轉彎的那一側，否則字會壓在軌跡線上看不清
-      const right = S.turn.dir === 'R';
       ctx.textAlign = right ? 'left' : 'right';
-      ctx.fillStyle = 'rgba(255,255,255,.95)';
+      ctx.fillStyle = right ? TURN_R_COLOR : 'rgba(255,255,255,.95)';
       ctx.fillText(right ? '右' : '左', tp[0] + (right ? 15 : -15), tp[1] + 4);
     }
   }
