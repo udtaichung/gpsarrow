@@ -168,7 +168,7 @@
     font-family:inherit;font-size:26px;line-height:1;border-radius:10px;
   }
   .stepper button:disabled{opacity:.3}
-  .stepper #rgNow{flex:1;text-align:center;font-size:20px;font-weight:600}
+  .stepper .val{flex:1;text-align:center;font-size:20px;font-weight:600}
   .toggles{display:flex;gap:10px;flex-wrap:wrap}
   .toggles button{
     flex:1;min-width:120px;background:none;border:1px solid #333;color:var(--ink);
@@ -240,10 +240,18 @@
     <input type="range" id="lk" min="20" max="200" step="10" value="60">
   </div>
   <div class="row">
+    <label>路寬補償 <i>±<span id="lnV">3</span> m</i></label>
+    <div class="stepper">
+      <button id="lnDn" aria-label="減少補償">−</button>
+      <div id="lnNow" class="val">±3 m</div>
+      <button id="lnUp" aria-label="增加補償">＋</button>
+    </div>
+  </div>
+  <div class="row">
     <label>下格顯示範圍 <i><span id="rgV">100</span> m</i></label>
     <div class="stepper">
       <button id="rgDn" aria-label="縮小範圍">−</button>
-      <div id="rgNow">100 m</div>
+      <div id="rgNow" class="val">100 m</div>
       <button id="rgUp" aria-label="放大範圍">＋</button>
     </div>
   </div>
@@ -298,6 +306,7 @@ const S = {
   raw: [], track: [], cum: [], total: 0,
   idx: 0, locked: false, rev: false,
   thr: 40, look: 60, range: 100, sound: true, mapApp: true,
+  lane: 3, side: 0,
   gpsHead: null, gpsHeadAt: 0,
   compass: null,
   pos: null, posAt: 0, speed: 0,
@@ -309,7 +318,10 @@ const S = {
 
 // 下格顯示範圍的級距：低段密（市區看轉彎細節），高段疏（郊區看大方向）
 const RANGES = [30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200];
+// 路寬補償的級距：半個車道約 1.75 m，靠路邊騎大約 2–4 m
+const LANES = [0, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
 const nearestRange = v => RANGES.reduce((a, b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, RANGES[0]);
+const nearestLane  = v => LANES.reduce((a, b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, LANES[0]);
 
 const $ = id => document.getElementById(id);
 const el = {
@@ -326,7 +338,7 @@ const PREF = 'gpsarrow.prefs';
 function savePrefs(){
   try {
     localStorage.setItem(PREF, JSON.stringify({
-      thr:S.thr, look:S.look, range:S.range, sound:S.sound, rev:S.rev, mapApp:S.mapApp
+      thr:S.thr, look:S.look, range:S.range, lane:S.lane, sound:S.sound, rev:S.rev, mapApp:S.mapApp
     }));
   } catch(e){}
 }
@@ -338,6 +350,7 @@ function loadPrefs(){
   if (Number.isFinite(p.look))  S.look  = clamp(p.look, 20, 200);
   // 舊版存的是 100–500，超出新範圍的值靠攏到最接近的級距
   if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 200));
+  if (Number.isFinite(p.lane))  S.lane  = nearestLane(clamp(p.lane, 0, 6));
   if (typeof p.sound === 'boolean') S.sound = p.sound;
   if (typeof p.mapApp === 'boolean') S.mapApp = p.mapApp;
   if (typeof p.rev === 'boolean')   S.rev   = p.rev;
@@ -430,7 +443,21 @@ function nearestOnTrack(pos, from, to){
     const d = Math.hypot(A.x + t*dx, A.y + t*dy);
     if (d < best.d) best = {d, i, t};
   }
+  // 偏在軌跡的哪一側（正 = 右側）。之後要靠它補償「軌跡在路中心、
+  // 人卻靠路邊騎」造成的固定橫向偏移。
+  const A = proj(S.track[best.i], pos), B = proj(S.track[best.i+1], pos);
+  const dx = B.x-A.x, dy = B.y-A.y, L = Math.hypot(dx, dy);
+  const px = A.x + best.t*dx, py = A.y + best.t*dy;
+  best.side = L > 0 ? (py*dx - px*dy)/L : 0;
   return best;
+}
+// 自 p 沿方位 brg 前進 m 公尺（m 可為負）
+function movePoint(p, brg, m){
+  const b = brg*D2R;
+  return {
+    lat: p.lat + (m*Math.cos(b))/(D2R*R),
+    lon: p.lon + (m*Math.sin(b))/(D2R*R*Math.cos(p.lat*D2R))
+  };
 }
 function idxAt(dist){
   const d = clamp(dist, 0, S.total);
@@ -897,6 +924,7 @@ function update(){
   S.locked = near.d < 300;
   S.idx = near.i;
   S.near = near;
+  S.side = near.side;
 
   const segLen = S.cum[near.i+1] - S.cum[near.i];
   const along = S.cum[near.i] + near.t * segLen;
@@ -928,7 +956,17 @@ function update(){
   if (off) target = pointAt(along);
   else {
     const look = clamp(S.speed * 6, S.look * 0.6, S.look * 2.2);
-    target = pointAt(along + Math.max(S.look, look));
+    const ahead = Math.max(S.look, look);
+    target = pointAt(along + ahead);
+    // GPX 多半錄的是路中心，實際卻是靠路邊騎，橫向固定偏個 2–3 m。
+    // 瞄準路中心的一個點，箭頭就會持續偏 atan(偏移/前瞻)——3 m 配 60 m
+    // 前瞻正好是 2.9°。把瞄準點往你所在的那一側平移同樣的量即可對消；
+    // 平移量以「路寬補償」為上限，超出的部分保留，該把你導回線上時照樣導。
+    const keep = clamp(S.side, -S.lane, S.lane);
+    if (keep){
+      const tb = trackBearingAt(along + ahead);
+      if (tb !== null) target = movePoint(target, tb + 90, keep);
+    }
   }
 
   document.body.classList.toggle('stale', h === null);
@@ -946,7 +984,8 @@ function update(){
 
   // 讀數
   el.dev.textContent = Math.round(near.d);
-  el.devLabel.textContent = off ? '偏離 公尺 — 回到軌跡' : '偏離 公尺';
+  el.devLabel.textContent = off ? '偏離 公尺 — 回到軌跡'
+    : '偏離 公尺' + (Math.abs(near.side) >= 1 ? (near.side > 0 ? '・右' : '・左') : '');
   el.spd.textContent = (S.speed * 3.6).toFixed(1);
   el.remain.textContent = remain > 1000
     ? `剩餘 ${(remain/1000).toFixed(1)} km`
@@ -1085,6 +1124,19 @@ function stepRange(d){
   S.range = RANGES[i];
   applyRange(); savePrefs(); update();
 }
+function applyLane(){
+  const i = LANES.indexOf(S.lane);
+  $('lnV').textContent = S.lane;
+  $('lnNow').textContent = '±' + S.lane + ' m';
+  $('lnDn').disabled = i <= 0;
+  $('lnUp').disabled = i >= LANES.length-1;
+}
+function stepLane(d){
+  S.lane = LANES[clamp(LANES.indexOf(S.lane) + d, 0, LANES.length-1)];
+  applyLane(); savePrefs(); update();
+}
+$('lnDn').addEventListener('click', () => stepLane(-1));
+$('lnUp').addEventListener('click', () => stepLane(+1));
 $('rgDn').addEventListener('click', () => stepRange(-1));
 $('rgUp').addEventListener('click', () => stepRange(+1));
 $('mapApp').addEventListener('click', e => {
@@ -1107,6 +1159,8 @@ $('thr').value = S.thr;   $('thrV').textContent = S.thr;
 $('lk').value  = S.look;  $('lkV').textContent  = S.look;
 S.range = nearestRange(S.range);
 applyRange();
+S.lane = nearestLane(S.lane);
+applyLane();
 $('snd').classList.toggle('on', S.sound);
 $('snd').textContent = S.sound ? '警告音 開' : '警告音 關';
 $('mapApp').classList.toggle('on', S.mapApp);
