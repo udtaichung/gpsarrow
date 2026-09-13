@@ -25,6 +25,8 @@ self.addEventListener('activate', e => {
   );
 });
 
+const isPage = path => path.endsWith('/') || /\.html?$/.test(path);
+
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
@@ -36,11 +38,28 @@ self.addEventListener('fetch', e => {
   // 永遠停在舊版，除非每次發版都記得手動改 VERSION——那太容易忘。
   e.respondWith(
     caches.match(req).then(hit => {
+      // 先複製一份舊的：hit 等一下會回傳給頁面，body 被讀掉就不能再 clone
+      const old = hit ? hit.clone() : null;
       const net = fetch(req).then(res => {
         // 順便把讀過的 GPX 存起來，之後離線也開得了
         if (res.ok && res.type === 'basic'){
           const copy = res.clone();
-          caches.open(VERSION).then(c => c.put(req, copy));
+          e.waitUntil((async () => {
+            const c = await caches.open(VERSION);
+            // 頁面本身有變動就通知前端，否則使用者得「開兩次」才看得到新版
+            let changed = false;
+            if (old && isPage(url.pathname)){
+              try {
+                const [a, b] = await Promise.all([old.text(), copy.clone().text()]);
+                changed = a !== b;
+              } catch(err){}
+            }
+            await c.put(req, copy);
+            if (changed){
+              const cls = await self.clients.matchAll({type:'window'});
+              for (const cl of cls) cl.postMessage({type:'gpsarrow-updated'});
+            }
+          })());
         }
         return res;
       }).catch(() => {

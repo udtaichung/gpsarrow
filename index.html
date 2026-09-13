@@ -186,7 +186,10 @@
     <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 60° 以上的轉彎，則要轉過去的那半邊轉暗藍並提示。</p>
   </div>
   <div class="file">
-    <input type="file" id="picker" accept=".gpx,application/gpx+xml,text/xml">
+    <!-- 不設 accept：iOS 的檔案 App 依 UTI 過濾，.gpx 沒有註冊的 UTI，
+         寫了 accept 反而會把 GPX 檔整個變灰選不到；Android 上不少檔案
+         提供者也把 .gpx 回報成 application/octet-stream，一樣會被濾掉。 -->
+    <input type="file" id="picker">
     <div id="status">請選擇 GPX 檔</div>
     <div id="dir">
       <div id="dirText"></div>
@@ -373,16 +376,45 @@ function loadPrefs(){
 // GPX 沒有「方向」欄位，點的排列順序本身就是方向：
 // 第一個 trkpt 是起點、最後一個是終點。反轉＝把順序倒過來。
 function parseGPX(text){
-  const doc = new DOMParser().parseFromString(text, 'application/xml');
-  if (doc.querySelector('parsererror')) throw new Error('GPX 格式解析失敗');
-  let nodes = [...doc.getElementsByTagName('trkpt')];
-  if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
-  if (!nodes.length) nodes = [...doc.getElementsByTagName('wpt')];
+  // BOM 或開頭的空白會讓 XML 解析器抱怨「宣告不在文件開頭」，先清掉
+  const src = String(text).replace(/^﻿/, '').replace(/^\s+/, '');
+  // 0 位元組多半是檔案還沒下載／同步完就被選走了
+  if (!src) throw new Error('檔案是空的（0 位元組）——可能還沒下載完，等一下再選一次');
+
+  let doc = new DOMParser().parseFromString(src, 'application/xml');
+  let bad = doc.querySelector('parsererror');
+  if (bad){                                   // 有些檔案改用 text/xml 才過得了
+    doc = new DOMParser().parseFromString(src, 'text/xml');
+    bad = doc.querySelector('parsererror');
+  }
+  if (bad){
+    // 各家瀏覽器的 parsererror 都包著一堆樣板文字，只留 "error on line…" 那段
+    const raw = (bad.textContent || '').replace(/\s+/g, ' ').trim();
+    const m = raw.match(/error on line[^]*/i) || raw.match(/:\s*(.+)$/);
+    const why = (m ? (m[1] || m[0]) : raw)
+      .split(/Below is a rendering/i)[0].trim().slice(0, 90);
+    throw new Error('GPX 解析失敗：' + (why || '格式不正確'));
+  }
+
+  // 用 NS 版本依「本地名稱」比對：有些 GPX 的節點帶前綴（<gpx:trkpt>），
+  // getElementsByTagName 比對的是含前綴的全名，會整個抓不到。
+  const pick = n => {
+    let r = [...doc.getElementsByTagNameNS('*', n)];
+    if (!r.length) r = [...doc.getElementsByTagName(n)];
+    return r;
+  };
+  let nodes = pick('trkpt');
+  if (!nodes.length) nodes = pick('rtept');
+  if (!nodes.length) nodes = pick('wpt');
+  if (!nodes.length){
+    throw new Error('檔案裡找不到軌跡點（trkpt／rtept／wpt），根節點是 <'
+      + (doc.documentElement ? doc.documentElement.nodeName : '?') + '>');
+  }
   const pts = nodes.map(n => ({
     lat: parseFloat(n.getAttribute('lat')),
     lon: parseFloat(n.getAttribute('lon'))
   })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
-  if (pts.length < 2) throw new Error('軌跡點不足兩個');
+  if (pts.length < 2) throw new Error(`只讀到 ${pts.length} 個有效座標，至少需要 2 個`);
   return pts;
 }
 function loadTrack(pts){
@@ -1129,10 +1161,13 @@ function fail(msg){
 el.picker.addEventListener('change', e => {
   const f = e.target.files[0];
   if (!f) return;
+  el.status.textContent = `讀取 ${f.name}（${(f.size/1024).toFixed(1)} KB）…`;
+  el.status.style.color = '#ffb000';
   const r = new FileReader();
+  r.onerror = () => fail(`讀不到檔案 ${f.name}：${r.error ? r.error.name : '未知錯誤'}`);
   r.onload = () => {
     try { setTrack(parseGPX(r.result), f.name); ready(S.track.length); }
-    catch(err){ fail(err.message); }
+    catch(err){ fail(`${f.name}：${err.message}`); }
   };
   r.readAsText(f);
 });
@@ -1285,6 +1320,18 @@ if (!qs){
 /* 離線 */
 if ('serviceWorker' in navigator && location.protocol !== 'file:'){
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  // 快取優先讓離線可用，代價是新版要「開兩次」才看得到。改由 Service Worker
+  // 在背景抓到新版時通知這裡：還停在起始畫面就直接重載，使用者不必知道
+  // 有這回事。騎乘中則不動，免得中途把畫面洗掉。
+  navigator.serviceWorker.addEventListener('message', ev => {
+    if (!ev.data || ev.data.type !== 'gpsarrow-updated') return;
+    if (el.start.classList.contains('hide')) return;      // 騎乘中，不打擾
+    try {
+      if (sessionStorage.getItem('gpsarrow.reloaded')) return;   // 一次啟動只重載一次
+      sessionStorage.setItem('gpsarrow.reloaded', '1');
+    } catch(e){}
+    location.reload();
+  });
 }
 
 })();
