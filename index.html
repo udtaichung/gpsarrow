@@ -312,7 +312,7 @@ const S = {
   pos: null, posAt: 0, speed: 0,
   off: false, lastBeep: 0, offRuns: 0,
   turn: null, lastTurnBeep: 0,
-  shown: 0,
+  shown: 0, bin: null,
   near: null, along: 0, mapHead: 0
 };
 
@@ -902,9 +902,21 @@ function openGmap(kind){
 }
 
 /* ======================= 主迴圈 ======================= */
+// 箭頭角度量化成 60 個區間（360/60 = 6°），中央那一區正好是螢幕正前方
+// ±3°。角度落在中央區就維持正前方，超過 ±3° 才跳下一區。
+// GPS 航向本身有一兩度的抖動，不量化的話箭頭會一直微微晃，反而難讀。
+const BIN = 6;
+// 純粹取最近區間的話，角度停在 3° 邊界上會在兩區之間反覆跳。
+// 要再多超過 1.5° 才換區，臨界處就穩得住。
+const BIN_HYST = 1.5;
+function quantize(deg){
+  if (S.bin !== null && Math.abs(wrap180(deg - S.bin)) <= BIN/2 + BIN_HYST) return S.bin;
+  S.bin = Math.round(deg / BIN) * BIN;
+  return S.bin;
+}
 function setArrow(deg){
   // 轉到最近的等效角度，避免 359→1 時整圈迴轉
-  const delta = wrap180(deg - S.shown);
+  const delta = wrap180(quantize(deg) - S.shown);
   S.shown += delta;
   el.arrow.style.transform = `rotate(${S.shown}deg)`;
 }
@@ -986,7 +998,7 @@ function update(){
   el.dev.textContent = Math.round(near.d);
   el.devLabel.textContent = off ? '偏離 公尺 — 回到軌跡'
     : '偏離 公尺' + (Math.abs(near.side) >= 1 ? (near.side > 0 ? '・右' : '・左') : '');
-  el.spd.textContent = (S.speed * 3.6).toFixed(1);
+  el.spd.textContent = Math.round(S.speed * 3.6);
   el.remain.textContent = remain > 1000
     ? `剩餘 ${(remain/1000).toFixed(1)} km`
     : `剩餘 ${Math.round(remain)} m`;
@@ -1087,7 +1099,7 @@ el.go.addEventListener('click', () => {
 function toggleDirection(){
   S.rev = !S.rev;
   if (S.raw.length) applyDirection();
-  S.shown = 0;
+  S.shown = 0; S.bin = null;
   el.arrow.style.transform = 'rotate(0deg)';
   syncDirButtons();
   describeDirection();
