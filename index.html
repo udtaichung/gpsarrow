@@ -252,6 +252,9 @@
     <button id="gmapBack">Google 地圖：導航回軌跡</button>
   </div>
   <div class="toggles">
+    <button id="mapApp" class="on">地圖用 App 開啟</button>
+  </div>
+  <div class="toggles">
     <button id="resync">重新定位到軌跡</button>
     <button id="close">關閉</button>
   </div>
@@ -290,7 +293,7 @@ const wrap180 = d => ((d + 540) % 360) - 180;
 const S = {
   raw: [], track: [], cum: [], total: 0,
   idx: 0, locked: false, rev: false,
-  thr: 40, look: 60, range: 100, sound: true,
+  thr: 40, look: 60, range: 100, sound: true, mapApp: true,
   gpsHead: null, gpsHeadAt: 0,
   compass: null,
   pos: null, posAt: 0, speed: 0,
@@ -319,7 +322,7 @@ const PREF = 'gpsarrow.prefs';
 function savePrefs(){
   try {
     localStorage.setItem(PREF, JSON.stringify({
-      thr:S.thr, look:S.look, range:S.range, sound:S.sound, rev:S.rev
+      thr:S.thr, look:S.look, range:S.range, sound:S.sound, rev:S.rev, mapApp:S.mapApp
     }));
   } catch(e){}
 }
@@ -332,6 +335,7 @@ function loadPrefs(){
   // 舊版存的是 100–500，超出新範圍的值靠攏到最接近的級距
   if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 200));
   if (typeof p.sound === 'boolean') S.sound = p.sound;
+  if (typeof p.mapApp === 'boolean') S.mapApp = p.mapApp;
   if (typeof p.rev === 'boolean')   S.rev   = p.rev;
 }
 
@@ -737,32 +741,89 @@ function drawMap(){
 
 /* ======================= Google 地圖 ======================= */
 // 箭頭只知道直線方向，可能指著一條河或一道牆的另一邊。真的迷路時，
-// 「照現有道路怎麼回去」要交給 Google 地圖。用官方 universal URL，
-// 手機上會直接開啟 Google 地圖 App。
-function gmapUrl(kind){
+// 「照現有道路怎麼回去」要交給 Google 地圖。
+//
+// 一定要開「App」而不是網頁：開 App 只是切換前景，本頁在背景保持存在，
+// 切回來就繼續；開網頁（尤其 iOS standalone 下的應用內瀏覽器）等於離開
+// 箭頭畫面，回來可能要重新載入、重新定位。
+// 三種平台各有各的正確做法，見下方各函式。
+
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// 以下三個是純函式，方便單獨驗證產生的 URL
+function mapWebUrl(kind, me, dst){
+  return kind === 'back'
+    ? `https://www.google.com/maps/dir/?api=1&origin=${me}&destination=${dst}&travelmode=bicycling`
+    : `https://www.google.com/maps/search/?api=1&query=${me}`;
+}
+// iOS：Google 地圖 App 的私有 scheme。未安裝時不會有任何反應，
+// 因此呼叫端要準備逾時退路。
+function mapIosUrl(kind, me, dst){
+  return kind === 'back'
+    ? `comgooglemaps://?saddr=${me}&daddr=${dst}&directionsmode=bicycling`
+    : `comgooglemaps://?center=${me}&q=${me}&zoom=16`;
+}
+// Android：intent:// 指定 package 直接叫出 Google 地圖，
+// 並內建 browser_fallback_url——未安裝 App 時由系統自動退回網頁，
+// 不需要自己做逾時判斷。
+function mapAndroidUrl(kind, me, dst){
+  const web = mapWebUrl(kind, me, dst);
+  return 'intent://' + web.slice('https://'.length)
+    + '#Intent;scheme=https;package=com.google.android.apps.maps'
+    + ';S.browser_fallback_url=' + encodeURIComponent(web) + ';end';
+}
+
+function gmapTarget(kind){
   if (!S.pos) return null;
   const me = `${S.pos.lat.toFixed(6)},${S.pos.lon.toFixed(6)}`;
+  let dst = me;
   if (kind === 'back'){
     if (!S.track.length || !S.near) return null;
     const t = pointAt(S.along);
-    return 'https://www.google.com/maps/dir/?api=1'
-      + `&origin=${me}&destination=${t.lat.toFixed(6)},${t.lon.toFixed(6)}`
-      + '&travelmode=bicycling';
+    dst = `${t.lat.toFixed(6)},${t.lon.toFixed(6)}`;
   }
-  return `https://www.google.com/maps/search/?api=1&query=${me}`;
+  return {kind, me, dst};
 }
+
+function openWeb(url){
+  // 新分頁／Custom Tab：本頁仍在，切回來即可
+  let w = null;
+  try { w = window.open(url, '_blank', 'noopener'); } catch(e){}
+  if (!w) location.href = url;   // 真的開不了新分頁才跳轉
+}
+
 function openGmap(kind){
-  const url = gmapUrl(kind);
-  if (!url){
+  const t = gmapTarget(kind);
+  if (!t){
     el.banner.textContent = S.pos ? '尚未載入軌跡' : '尚未取得定位';
     return;
   }
-  // 優先開新分頁，本頁保持運作（回來時 visibilitychange 會重新取得 Wake Lock）。
-  // iOS 加到主畫面的 standalone 模式下 window.open 可能無聲失效，
-  // 此時退而求其次直接跳轉——迷路當下「打不開地圖」比「離開本頁」嚴重得多。
-  let w = null;
-  try { w = window.open(url, '_blank', 'noopener'); } catch(e){}
-  if (!w) location.href = url;
+  const web = mapWebUrl(t.kind, t.me, t.dst);
+  if (!S.mapApp) return openWeb(web);
+
+  if (IS_ANDROID){
+    // intent:// 自帶退路，直接跳轉即可：有 App 就切到 App（本頁留在背景），
+    // 沒有 App 系統才會走 fallback 開網頁。
+    location.href = mapAndroidUrl(t.kind, t.me, t.dst);
+    return;
+  }
+  if (IS_IOS){
+    // 私有 scheme 未安裝時毫無反應，用「頁面有沒有被切到背景」判斷是否成功。
+    let left = false;
+    const gone = () => { left = true; };
+    document.addEventListener('visibilitychange', gone);
+    window.addEventListener('pagehide', gone);
+    location.href = mapIosUrl(t.kind, t.me, t.dst);
+    setTimeout(() => {
+      document.removeEventListener('visibilitychange', gone);
+      window.removeEventListener('pagehide', gone);
+      if (!left && document.visibilityState === 'visible') openWeb(web);
+    }, 1200);
+    return;
+  }
+  openWeb(web);   // 桌機
 }
 
 /* ======================= 主迴圈 ======================= */
@@ -975,6 +1036,12 @@ function stepRange(d){
 }
 $('rgDn').addEventListener('click', () => stepRange(-1));
 $('rgUp').addEventListener('click', () => stepRange(+1));
+$('mapApp').addEventListener('click', e => {
+  S.mapApp = !S.mapApp;
+  e.currentTarget.classList.toggle('on', S.mapApp);
+  e.currentTarget.textContent = S.mapApp ? '地圖用 App 開啟' : '地圖用網頁開啟';
+  savePrefs();
+});
 $('snd').addEventListener('click', e => {
   S.sound = !S.sound;
   e.currentTarget.classList.toggle('on', S.sound);
@@ -991,6 +1058,8 @@ S.range = nearestRange(S.range);
 applyRange();
 $('snd').classList.toggle('on', S.sound);
 $('snd').textContent = S.sound ? '警告音 開' : '警告音 關';
+$('mapApp').classList.toggle('on', S.mapApp);
+$('mapApp').textContent = S.mapApp ? '地圖用 App 開啟' : '地圖用網頁開啟';
 syncDirButtons();
 sizeMap();
 

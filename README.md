@@ -77,7 +77,21 @@ python -m http.server 8000
 
 這補上了箭頭的根本限制：箭頭只知道**直線方向**，它可能指著一條河、一道圍牆或私人土地的另一邊。Google 地圖知道實際道路怎麼走。設定面板裡另有兩個明確選項，任何狀態下都能各自叫出。
 
-用的是 Google 官方 universal URL，手機上會直接開啟 Google 地圖 App，並且開在**新分頁**，本頁繼續運作（回來時會重新取得 Wake Lock）。iOS 加到主畫面的 standalone 模式下 `window.open` 可能無聲失效，此時退而求其次直接跳轉——迷路當下「打不開地圖」比「離開本頁」嚴重得多。
+### 一定要開 App，不是網頁
+
+開 **App** 只是切換前景，箭頭頁面留在背景，切回來就繼續。開**網頁**（尤其 iOS 加到主畫面後的應用內瀏覽器）等於離開箭頭畫面，回來可能要重新載入、重新定位。所以三種平台各用各的正確做法：
+
+| 平台 | 做法 | App 未安裝時 |
+|---|---|---|
+| Android | `intent://…;package=com.google.android.apps.maps;S.browser_fallback_url=…;end` | 系統自動走 `browser_fallback_url` 開網頁 |
+| iOS / iPadOS | `comgooglemaps://`（單車模式 `directionsmode=bicycling`） | 私有 scheme 無聲失效，1.2 秒後若頁面仍在前景就改開網頁新分頁 |
+| 桌機 | 網頁新分頁 | — |
+
+Android 的 `intent://` 自帶退路，不需要自己做逾時判斷；iOS 沒有這種機制，只能用「頁面有沒有被切到背景」來判斷 App 是否接手。iPadOS 會偽裝成 macOS，靠 `navigator.maxTouchPoints` 補判。
+
+設定面板有「**地圖用 App 開啟**」開關（預設開）。若你沒裝 Google 地圖 App，或偏好網頁版，關掉即可一律走網頁。
+
+**注意**：切到 Google 地圖期間，箭頭 App 在背景被暫停——沒有偏離警告，也沒有轉彎提示。這是無法避免的，所以它是個「我迷路了，讓我看一下地圖」的動作，不是可以一直開著的東西。
 
 **這一項需要網路**——與 App 其餘部分不同，地圖鍵在沒訊號的山區按下去不會有東西。下格的軌跡形狀才是離線時的依靠。
 
