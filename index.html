@@ -363,7 +363,49 @@ function loadTrack(pts){
   S.idx = 0; S.locked = false; S.near = null; S.along = 0;
 }
 // 原始點序另外保存，反轉可以無限次來回切換而不失真
-function setTrack(pts){ S.raw = pts; applyDirection(); }
+function setTrack(pts, name){ S.raw = pts; applyDirection(); if (name !== undefined) saveTrack(name); }
+
+/* ---------- 軌跡持久化 ----------
+   軌跡只放在記憶體裡是不行的：切到 Google 地圖看久一點，手機記憶體
+   一吃緊就會把背景網頁回收，切回來是整頁重新載入。用檔案選擇器選的
+   GPX 這時已經救不回來，得在山上重選一次檔案。
+   座標改存成 1e6 定點整數再做差分：相鄰點相距 5–10 m 只差 50–90，
+   每點約 8 個字元，一萬個點約 80 KB，長軌跡也塞得進 localStorage。 */
+const TRACK_KEY = 'gpsarrow.track';
+const RIDE_KEY  = 'gpsarrow.riding';
+function saveTrack(name){
+  try {
+    const p = S.raw;
+    if (!p || p.length < 2) return;
+    let la = Math.round(p[0].lat*1e6), lo = Math.round(p[0].lon*1e6);
+    const lat0 = la, lon0 = lo, d = [];
+    for (let i = 1; i < p.length; i++){
+      const a = Math.round(p[i].lat*1e6), b = Math.round(p[i].lon*1e6);
+      d.push((a-la) + ',' + (b-lo));
+      la = a; lo = b;
+    }
+    localStorage.setItem(TRACK_KEY, JSON.stringify(
+      {v:1, name:name || '軌跡', lat0, lon0, d:d.join(';'), at:Date.now()}));
+  } catch(e){
+    // 配額不足等情況就放棄保存，不影響騎乘本身
+    try { localStorage.removeItem(TRACK_KEY); } catch(e2){}
+  }
+}
+function loadSavedTrack(){
+  try {
+    const o = JSON.parse(localStorage.getItem(TRACK_KEY) || 'null');
+    if (!o || o.v !== 1 || !Number.isFinite(o.lat0)) return null;
+    let la = o.lat0, lo = o.lon0;
+    const pts = [{lat: la/1e6, lon: lo/1e6}];
+    if (o.d) for (const s of o.d.split(';')){
+      const c = s.split(',');
+      la += +c[0]; lo += +c[1];
+      if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+      pts.push({lat: la/1e6, lon: lo/1e6});
+    }
+    return pts.length >= 2 ? {pts, name:o.name, at:o.at} : null;
+  } catch(e){ return null; }
+}
 function applyDirection(){
   loadTrack(S.rev ? S.raw.slice().reverse() : S.raw.slice());
 }
@@ -948,6 +990,7 @@ function ready(n){
   el.status.textContent = `已載入 ${n} 個軌跡點，總長 ${(S.total/1000).toFixed(1)} km`;
   el.status.style.color = '#8fdc8f';
   el.go.disabled = false;
+  el.go.textContent = '開始';   // 選了新檔就是新的一趟，還原流程會再覆蓋成「繼續騎乘」
   describeDirection();
 }
 function fail(msg){
@@ -961,7 +1004,7 @@ el.picker.addEventListener('change', e => {
   if (!f) return;
   const r = new FileReader();
   r.onload = () => {
-    try { setTrack(parseGPX(r.result)); ready(S.track.length); }
+    try { setTrack(parseGPX(r.result), f.name); ready(S.track.length); }
     catch(err){ fail(err.message); }
   };
   r.readAsText(f);
@@ -974,7 +1017,7 @@ if (qs){
     fail('用 file:// 開啟時無法自動載入 GPX（瀏覽器安全限制），請改用 GitHub Pages／本機 http 伺服器，或直接在上面選檔。');
   } else {
     fetch(qs).then(r => { if(!r.ok) throw new Error('讀不到 ' + qs); return r.text(); })
-      .then(t => { setTrack(parseGPX(t)); ready(S.track.length); })
+      .then(t => { setTrack(parseGPX(t), qs); ready(S.track.length); })
       .catch(err => fail(err.message));
   }
 }
@@ -983,6 +1026,7 @@ if (location.protocol === 'file:'){
 }
 
 el.go.addEventListener('click', () => {
+  try { localStorage.setItem(RIDE_KEY, String(Date.now())); } catch(e){}
   el.start.classList.add('hide');
   initCompass();
   unlockAudio();                            // 借這次點擊解鎖 iOS 音訊（不出聲）
@@ -1062,6 +1106,24 @@ $('mapApp').classList.toggle('on', S.mapApp);
 $('mapApp').textContent = S.mapApp ? '地圖用 App 開啟' : '地圖用網頁開啟';
 syncDirButtons();
 sizeMap();
+
+/* 還原上次的軌跡：頁面被系統回收後重新載入時，不必再選一次檔案。
+   ?gpx= 有指定時以它為準。放在 loadPrefs() 之後，反轉方向才會跟著套用。 */
+if (!qs){
+  const saved = loadSavedTrack();
+  if (saved){
+    setTrack(saved.pts);             // 不傳 name，避免原樣再寫回一次
+    ready(S.track.length);
+    let riding = 0;
+    try { riding = +localStorage.getItem(RIDE_KEY) || 0; } catch(e){}
+    const mins = Math.round((Date.now() - saved.at)/60000);
+    const when = mins < 60 ? `${mins} 分鐘前` : (mins < 1440 ? `${Math.round(mins/60)} 小時前` : `${Math.round(mins/1440)} 天前`);
+    el.status.textContent = `${saved.name}（${when}載入）・${S.track.length} 點・${(S.total/1000).toFixed(1)} km`;
+    // 12 小時內按過「開始」＝這趟還在騎，按鍵改成「繼續騎乘」。
+    // 仍然需要這一下點擊：iOS 的羅盤權限與音訊解鎖都只能由使用者手勢觸發。
+    if (riding && Date.now() - riding < 12*3600*1000) el.go.textContent = '繼續騎乘';
+  }
+}
 
 /* 離線 */
 if ('serviceWorker' in navigator && location.protocol !== 'file:'){
