@@ -82,6 +82,15 @@
   #arrow{height:88%;width:auto;aspect-ratio:1/1;max-width:92%;transition:transform .28s cubic-bezier(.2,.7,.3,1)}
   #arrow path{fill:var(--ink)}
   body.stale #arrow path{fill:#4a4a4a}
+  /* 紅屏上灰箭頭幾乎看不見，改用半透明白：仍表示方向不可靠，但讀得到 */
+  body.off.stale #arrow path{fill:rgba(255,255,255,.45)}
+  /* 循跡箭頭與「回到軌跡」箭頭是兩個不同圖形，紅屏下一眼可辨 */
+  #arrow .ret{display:none}
+  body.off #arrow .nav{display:none}
+  body.off #arrow .ret{display:inline}
+  /* 最近點在身後：整個箭頭閃爍，提醒該掉頭而不是硬往前 */
+  @keyframes uturn{0%,100%{opacity:1}50%{opacity:.35}}
+  body.off.back #arrow{animation:uturn 1s ease-in-out infinite}
 
   #banner{
     position:absolute;bottom:4%;left:0;right:0;text-align:center;
@@ -159,7 +168,13 @@
 
 <div id="stage">
   <svg id="arrow" viewBox="0 0 100 100" aria-hidden="true">
-    <path d="M50 6 L88 78 L50 60 L12 78 Z"/>
+    <!-- 循跡：實心箭頭 -->
+    <path class="nav" d="M50 6 L88 78 L50 60 L12 78 Z"/>
+    <!-- 回到軌跡：箭頭指向一條代表軌跡的橫線 -->
+    <g class="ret">
+      <path d="M6 8 H94 V19 H6 Z"/>
+      <path d="M50 26 L78 58 L61 58 L61 94 L39 94 L39 58 L22 58 Z"/>
+    </g>
   </svg>
   <div id="banner"></div>
 </div>
@@ -520,13 +535,20 @@ function drawMap(){
   if (S.along < rng*0.5) mark(S.track[0], 'start');
   if (S.total - S.along < rng*1.25) mark(S.track[S.track.length-1], 'end');
 
-  // 偏離時，畫一條指回最近軌跡點的線
+  // 偏離時，畫一條指回最近軌跡點的線，並標上距離
   if (onRed){
     const n = toScreen(pointAt(S.along));
     ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2;
     ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(n[0], n[1]); ctx.stroke();
     ctx.setLineDash([]);
+    // 最近點（回去的目標）畫一個實心點，和起訖點記號區分開
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(n[0], n[1], 4, 0, Math.PI*2); ctx.fill();
+    ctx.textAlign = 'center';
+    // 偏離很遠時最近點會落在畫面外，距離標籤仍要留在可視範圍內
+    ctx.fillText(Math.round(S.near.d) + ' m',
+      clamp((cx+n[0])/2, 26, W-26), clamp((cy+n[1])/2 - 6, 14, H-6));
   }
 
   // 騎士
@@ -581,9 +603,14 @@ function update(){
   }
 
   document.body.classList.toggle('stale', h === null);
+  let rel = null;
   if (h !== null && haversine(S.pos, target) > 3){
-    setArrow(wrap180(bearing(S.pos, target) - h));
+    rel = wrap180(bearing(S.pos, target) - h);
+    setArrow(rel);
   }
+  // 回到軌跡的最近點在身後（相對方位超過 ±120°）＝該掉頭，不是硬往前騎
+  const back = off && rel !== null && Math.abs(rel) > 120;
+  document.body.classList.toggle('back', back);
   // 沒有航向時，下格改以軌跡本身的行進方向朝上，形狀仍然可讀
   S.mapHead = h !== null ? h
     : bearing(pointAt(Math.max(0, along-5)), pointAt(Math.min(S.total, along+15)));
@@ -597,7 +624,12 @@ function update(){
     : `剩餘 ${Math.round(remain)} m`;
 
   if (h === null) el.banner.textContent = '等待方向：先往前騎一段';
-  else if (off) { el.banner.textContent = '偏離軌跡'; alarm(); }
+  else if (off) {
+    el.banner.textContent = back
+      ? `請掉頭 — 軌跡在後方 ${Math.round(near.d)} m`
+      : `往箭頭方向回到軌跡 — ${Math.round(near.d)} m`;
+    alarm();
+  }
   else if (remain < 25) el.banner.textContent = '抵達終點';
   else el.banner.textContent = '';
 

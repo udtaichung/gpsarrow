@@ -31,11 +31,12 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // 快取優先：騎乘中不該為了網路等待，且多半根本沒訊號。
+  // stale-while-revalidate：立刻回快取（騎乘中不該為了網路等待，且多半沒訊號），
+  // 同時在背景更新，下次開啟就是新版。純 cache-first 會讓已安裝的使用者
+  // 永遠停在舊版，除非每次發版都記得手動改 VERSION——那太容易忘。
   e.respondWith(
-    caches.match(req, {ignoreSearch: false}).then(hit => {
-      if (hit) return hit;
-      return fetch(req).then(res => {
+    caches.match(req).then(hit => {
+      const net = fetch(req).then(res => {
         // 順便把讀過的 GPX 存起來，之後離線也開得了
         if (res.ok && res.type === 'basic'){
           const copy = res.clone();
@@ -47,6 +48,7 @@ self.addEventListener('fetch', e => {
         if (req.mode === 'navigate') return caches.match('./index.html');
         return Response.error();
       });
+      return hit || net;
     })
   );
 });
