@@ -220,7 +220,7 @@
 <div class="foot">
   <div id="remain">剩餘 –</div>
   <div class="fbtns">
-    <button id="gmap" disabled>地圖</button>
+    <button id="gmap">地圖</button>
     <button id="gear">設定</button>
   </div>
 </div>
@@ -794,39 +794,41 @@ const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
+// 一律不傳自己的座標。Google 地圖本來就知道你在哪，而且它的定位是持續
+// 更新的；傳一個按下按鍵那一瞬間的座標快照進去，反而是在路線裡放了一個
+// 過時的起點。「目前位置」更是完全不需要參數，硬傳還會多插一根搜尋圖釘。
+// 只有導航的「目的地」是 Google 地圖不可能自己知道的，非傳不可。
+//
 // 以下三個是純函式，方便單獨驗證產生的 URL
-function mapWebUrl(kind, me, dst){
+function mapWebUrl(kind, dst){
   return kind === 'back'
-    ? `https://www.google.com/maps/dir/?api=1&origin=${me}&destination=${dst}&travelmode=bicycling`
-    : `https://www.google.com/maps/search/?api=1&query=${me}`;
+    ? `https://www.google.com/maps/dir/?api=1&destination=${dst}&travelmode=bicycling`
+    : 'https://www.google.com/maps';
 }
 // iOS：Google 地圖 App 的私有 scheme。未安裝時不會有任何反應，
-// 因此呼叫端要準備逾時退路。
-function mapIosUrl(kind, me, dst){
+// 因此呼叫端要準備逾時退路。省略 saddr 即代表以目前位置為起點。
+function mapIosUrl(kind, dst){
   return kind === 'back'
-    ? `comgooglemaps://?saddr=${me}&daddr=${dst}&directionsmode=bicycling`
-    : `comgooglemaps://?center=${me}&q=${me}&zoom=16`;
+    ? `comgooglemaps://?daddr=${dst}&directionsmode=bicycling`
+    : 'comgooglemaps://';
 }
 // Android：intent:// 指定 package 直接叫出 Google 地圖，
 // 並內建 browser_fallback_url——未安裝 App 時由系統自動退回網頁，
 // 不需要自己做逾時判斷。
-function mapAndroidUrl(kind, me, dst){
-  const web = mapWebUrl(kind, me, dst);
+function mapAndroidUrl(kind, dst){
+  const web = mapWebUrl(kind, dst);
   return 'intent://' + web.slice('https://'.length)
     + '#Intent;scheme=https;package=com.google.android.apps.maps'
     + ';S.browser_fallback_url=' + encodeURIComponent(web) + ';end';
 }
 
 function gmapTarget(kind){
+  // 「目前位置」不需要任何座標，連 GPS 都還沒定到位也能按
+  if (kind !== 'back') return {kind, dst:''};
   if (!S.pos) return null;
-  const me = `${S.pos.lat.toFixed(6)},${S.pos.lon.toFixed(6)}`;
-  let dst = me;
-  if (kind === 'back'){
-    if (!S.track.length || !S.near) return null;
-    const t = pointAt(S.along);
-    dst = `${t.lat.toFixed(6)},${t.lon.toFixed(6)}`;
-  }
-  return {kind, me, dst};
+  if (!S.track.length || !S.near) return null;
+  const t = pointAt(S.along);
+  return {kind, dst: `${t.lat.toFixed(6)},${t.lon.toFixed(6)}`};
 }
 
 function openWeb(url){
@@ -842,13 +844,13 @@ function openGmap(kind){
     el.banner.textContent = S.pos ? '尚未載入軌跡' : '尚未取得定位';
     return;
   }
-  const web = mapWebUrl(t.kind, t.me, t.dst);
+  const web = mapWebUrl(t.kind, t.dst);
   if (!S.mapApp) return openWeb(web);
 
   if (IS_ANDROID){
     // intent:// 自帶退路，直接跳轉即可：有 App 就切到 App（本頁留在背景），
     // 沒有 App 系統才會走 fallback 開網頁。
-    location.href = mapAndroidUrl(t.kind, t.me, t.dst);
+    location.href = mapAndroidUrl(t.kind, t.dst);
     return;
   }
   if (IS_IOS){
@@ -857,7 +859,7 @@ function openGmap(kind){
     const gone = () => { left = true; };
     document.addEventListener('visibilitychange', gone);
     window.addEventListener('pagehide', gone);
-    location.href = mapIosUrl(t.kind, t.me, t.dst);
+    location.href = mapIosUrl(t.kind, t.dst);
     setTimeout(() => {
       document.removeEventListener('visibilitychange', gone);
       window.removeEventListener('pagehide', gone);
@@ -943,7 +945,6 @@ function update(){
   el.remain.textContent = remain > 1000
     ? `剩餘 ${(remain/1000).toFixed(1)} km`
     : `剩餘 ${Math.round(remain)} m`;
-  el.gmap.disabled = false;
   el.gmap.textContent = off ? '導航回軌跡' : '地圖';
 
   if (h === null) el.banner.textContent = '等待方向：先往前騎一段';

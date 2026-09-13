@@ -84,8 +84,19 @@ python -m http.server 8000
 | 平台 | 做法 | App 未安裝時 |
 |---|---|---|
 | Android | `intent://…;package=com.google.android.apps.maps;S.browser_fallback_url=…;end` | 系統自動走 `browser_fallback_url` 開網頁 |
-| iOS / iPadOS | `comgooglemaps://`（單車模式 `directionsmode=bicycling`） | 私有 scheme 無聲失效，1.2 秒後若頁面仍在前景就改開網頁新分頁 |
+| iOS / iPadOS | `comgooglemaps://` | 私有 scheme 無聲失效，1.2 秒後若頁面仍在前景就改開網頁新分頁 |
 | 桌機 | 網頁新分頁 | — |
+
+### 不傳自己的座標
+
+Google 地圖本來就知道你在哪，而且它的定位是**持續更新的**。傳一個「按下按鍵那一瞬間」的座標快照進去，等於在路線規劃裡放了一個過時的起點——比不傳更糟。
+
+所以：
+
+- **目前位置**：完全不帶參數（`comgooglemaps://` / `https://www.google.com/maps`）。硬傳 `q=` 還會多插一根搜尋圖釘。
+- **導航回軌跡**：只帶 `destination` / `daddr`（加單車模式），起點交給 Google 地圖自己定位。
+
+附帶好處是「地圖」鍵**不必等 GPS 定到位就能按**——剛開啟、還在等第一次定位時就可以先看一眼周邊。
 
 Android 的 `intent://` 自帶退路，不需要自己做逾時判斷；iOS 沒有這種機制，只能用「頁面有沒有被切到背景」來判斷 App 是否接手。iPadOS 會偽裝成 macOS，靠 `navigator.maxTouchPoints` 補判。
 
