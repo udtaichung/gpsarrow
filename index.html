@@ -30,8 +30,12 @@
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     transition:background-color .12s linear;
   }
-  /* 前方有轉彎：暗藍底。偏離（紅）優先，故 .off 規則排在後面覆蓋 */
-  body.turn{background:var(--turn)}
+  /* 前方有轉彎：只染「要轉過去的那半邊」。右轉染右半、左轉染左半，
+     用餘光就能判斷方向，不必讀橫幅上的字。下格的 canvas 是透明的，
+     所以這道分界會同時貫穿上下兩格。
+     偏離（紅）優先，故 .off 規則排在後面覆蓋。 */
+  body.turnR{background:linear-gradient(to right, var(--bg) 50%, var(--turn) 50%)}
+  body.turnL{background:linear-gradient(to right, var(--turn) 50%, var(--bg) 50%)}
   body.off{background:var(--alarm)}
   body.off.pulse{background:#ff1a1a}
 
@@ -179,7 +183,7 @@
 <section id="start">
   <div>
     <h1>軌跡箭頭</h1>
-    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 60° 以上的轉彎則轉暗藍並提示。</p>
+    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 60° 以上的轉彎，則要轉過去的那半邊轉暗藍並提示。</p>
   </div>
   <div class="file">
     <input type="file" id="picker" accept=".gpx,application/gpx+xml,text/xml">
@@ -910,7 +914,9 @@ function update(){
   const turn = off ? null : turnAhead(along, !!S.turn);
   const turnRise = !!turn && !S.turn;   // 只在「剛偵測到」時響一次
   S.turn = turn;
-  document.body.classList.toggle('turn', !!turn);
+  document.body.classList.toggle('turn', !!turn);          // 對比用
+  document.body.classList.toggle('turnR', !!turn && turn.dir === 'R');
+  document.body.classList.toggle('turnL', !!turn && turn.dir === 'L');
   if (turnRise && Date.now() - S.lastTurnBeep > 6000){
     S.lastTurnBeep = Date.now();
     turnBeep(turn.dir);
