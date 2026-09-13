@@ -122,8 +122,13 @@
   body.off .foot button{border-color:rgba(255,255,255,.45)}
   .fbtns{display:flex;gap:8px}
   .foot button:disabled{opacity:.4}
-  /* 偏離時「導航回軌跡」是當下最該按的鍵，反白突顯 */
-  body.off #gmap{background:#fff;color:var(--alarm);border-color:#fff;font-weight:650}
+  /* 偏離時「導航回軌跡」是當下最該按的鍵：反白突顯，並放大到戴手套、
+     車身晃動時也按得到（觸控目標約 48px 高）。 */
+  body.off #gmap{
+    background:#fff;color:var(--alarm);border-color:#fff;
+    font-weight:700;font-size:16px;padding:14px 20px;
+  }
+  body.off .foot{padding-bottom:14px}
 
   /* ---------- 設定 ---------- */
   #panel{
@@ -136,6 +141,14 @@
   .row label{font-size:14px;color:var(--ink);display:flex;justify-content:space-between}
   .row label i{font-style:normal;color:var(--dim)}
   .row input[type=range]{width:100%;accent-color:#fff}
+  /* 騎乘中滑桿難以精準拖動，範圍改用大面積的 ＋／－ 按鍵 */
+  .stepper{display:flex;align-items:center;gap:12px}
+  .stepper button{
+    flex:0 0 72px;height:54px;background:none;border:1px solid #333;color:var(--ink);
+    font-family:inherit;font-size:26px;line-height:1;border-radius:10px;
+  }
+  .stepper button:disabled{opacity:.3}
+  .stepper #rgNow{flex:1;text-align:center;font-size:20px;font-weight:600}
   .toggles{display:flex;gap:10px;flex-wrap:wrap}
   .toggles button{
     flex:1;min-width:120px;background:none;border:1px solid #333;color:var(--ink);
@@ -150,7 +163,7 @@
 <section id="start">
   <div>
     <h1>軌跡箭頭</h1>
-    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 100–500 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動。</p>
+    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動。</p>
   </div>
   <div class="file">
     <input type="file" id="picker" accept=".gpx,application/gpx+xml,text/xml">
@@ -185,7 +198,7 @@
 
 <div id="mapWrap">
   <canvas id="map"></canvas>
-  <div id="mapTag">前方 200 m</div>
+  <div id="mapTag">前方 100 m</div>
 </div>
 
 <div class="foot">
@@ -207,8 +220,12 @@
     <input type="range" id="lk" min="20" max="200" step="10" value="60">
   </div>
   <div class="row">
-    <label>下格顯示範圍 <i><span id="rgV">200</span> m</i></label>
-    <input type="range" id="rg" min="100" max="500" step="50" value="200">
+    <label>下格顯示範圍 <i><span id="rgV">100</span> m</i></label>
+    <div class="stepper">
+      <button id="rgDn" aria-label="縮小範圍">−</button>
+      <div id="rgNow">100 m</div>
+      <button id="rgUp" aria-label="放大範圍">＋</button>
+    </div>
   </div>
   <div class="toggles">
     <button id="snd" class="on">警告音 開</button>
@@ -257,7 +274,7 @@ const wrap180 = d => ((d + 540) % 360) - 180;
 const S = {
   raw: [], track: [], cum: [], total: 0,
   idx: 0, locked: false, rev: false,
-  thr: 40, look: 60, range: 200, sound: true,
+  thr: 40, look: 60, range: 100, sound: true,
   gpsHead: null, gpsHeadAt: 0,
   compass: null,
   pos: null, posAt: 0, speed: 0,
@@ -265,6 +282,10 @@ const S = {
   shown: 0,
   near: null, along: 0, mapHead: 0
 };
+
+// 下格顯示範圍的級距：低段密（市區看轉彎細節），高段疏（郊區看大方向）
+const RANGES = [30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200];
+const nearestRange = v => RANGES.reduce((a, b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, RANGES[0]);
 
 const $ = id => document.getElementById(id);
 const el = {
@@ -291,7 +312,8 @@ function loadPrefs(){
   if (!p) return;
   if (Number.isFinite(p.thr))   S.thr   = clamp(p.thr, 10, 150);
   if (Number.isFinite(p.look))  S.look  = clamp(p.look, 20, 200);
-  if (Number.isFinite(p.range)) S.range = clamp(p.range, 100, 500);
+  // 舊版存的是 100–500，超出新範圍的值靠攏到最接近的級距
+  if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 200));
   if (typeof p.sound === 'boolean') S.sound = p.sound;
   if (typeof p.rev === 'boolean')   S.rev   = p.rev;
 }
@@ -517,11 +539,14 @@ function drawMap(){
     ctx.fillText(Math.round(d) + ' m', W-10, y - 4);
   });
 
-  // 偏離門檻圈
-  ctx.strokeStyle = onRed ? 'rgba(255,255,255,.45)' : '#333';
-  ctx.setLineDash([2, 4]);
-  ctx.beginPath(); ctx.arc(cx, cy, S.thr*scale, 0, Math.PI*2); ctx.stroke();
-  ctx.setLineDash([]);
+  // 偏離門檻圈。門檻比視野還遠時（例如 30 m 視野配 40 m 門檻），圓圈
+  // 整個落在格子外，畫出來只剩一道撐滿畫面的弧線，沒有資訊，此時不畫。
+  if (S.thr < rng){
+    ctx.strokeStyle = onRed ? 'rgba(255,255,255,.45)' : '#333';
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath(); ctx.arc(cx, cy, S.thr*scale, 0, Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   // 走過的一段（暗）與前方一段（亮）
   stroke(polyline(S.along - rng*0.5, S.along), onRed ? 'rgba(255,255,255,.4)' : '#3a3a3a', 3);
@@ -591,8 +616,12 @@ function openGmap(kind){
     el.banner.textContent = S.pos ? '尚未載入軌跡' : '尚未取得定位';
     return;
   }
-  // 開新分頁，本頁保持運作；回來時 visibilitychange 會重新取得 Wake Lock
-  window.open(url, '_blank', 'noopener');
+  // 優先開新分頁，本頁保持運作（回來時 visibilitychange 會重新取得 Wake Lock）。
+  // iOS 加到主畫面的 standalone 模式下 window.open 可能無聲失效，
+  // 此時退而求其次直接跳轉——迷路當下「打不開地圖」比「離開本頁」嚴重得多。
+  let w = null;
+  try { w = window.open(url, '_blank', 'noopener'); } catch(e){}
+  if (!w) location.href = url;
 }
 
 /* ======================= 主迴圈 ======================= */
@@ -773,11 +802,21 @@ $('gear').addEventListener('click', () => el.panel.classList.add('show'));
 $('close').addEventListener('click', () => el.panel.classList.remove('show'));
 $('thr').addEventListener('input', e => { S.thr = +e.target.value; $('thrV').textContent = S.thr; savePrefs(); update(); });
 $('lk').addEventListener('input', e => { S.look = +e.target.value; $('lkV').textContent = S.look; savePrefs(); update(); });
-$('rg').addEventListener('input', e => {
-  S.range = +e.target.value; $('rgV').textContent = S.range;
+function applyRange(){
+  const i = RANGES.indexOf(S.range);
+  $('rgV').textContent = S.range;
+  $('rgNow').textContent = S.range + ' m';
+  $('rgDn').disabled = i <= 0;
+  $('rgUp').disabled = i >= RANGES.length-1;
   el.mapTag.textContent = `前方 ${S.range} m`;
-  savePrefs(); update();
-});
+}
+function stepRange(d){
+  const i = clamp(RANGES.indexOf(S.range) + d, 0, RANGES.length-1);
+  S.range = RANGES[i];
+  applyRange(); savePrefs(); update();
+}
+$('rgDn').addEventListener('click', () => stepRange(-1));
+$('rgUp').addEventListener('click', () => stepRange(+1));
 $('snd').addEventListener('click', e => {
   S.sound = !S.sound;
   e.currentTarget.classList.toggle('on', S.sound);
@@ -790,8 +829,8 @@ $('resync').addEventListener('click', () => { S.locked = false; el.panel.classLi
 loadPrefs();
 $('thr').value = S.thr;   $('thrV').textContent = S.thr;
 $('lk').value  = S.look;  $('lkV').textContent  = S.look;
-$('rg').value  = S.range; $('rgV').textContent  = S.range;
-el.mapTag.textContent = `前方 ${S.range} m`;
+S.range = nearestRange(S.range);
+applyRange();
 $('snd').classList.toggle('on', S.sound);
 $('snd').textContent = S.sound ? '警告音 開' : '警告音 關';
 syncDirButtons();
