@@ -160,8 +160,8 @@
   .row{display:flex;flex-direction:column;gap:8px}
   .row label{font-size:14px;color:var(--ink);display:flex;justify-content:space-between}
   .row label i{font-style:normal;color:var(--dim)}
-  .row input[type=range]{width:100%;accent-color:#fff}
-  /* 騎乘中滑桿難以精準拖動，範圍改用大面積的 ＋／－ 按鍵 */
+  .row input[type=range]{width:100%;accent-color:#fff;height:34px}
+  /* 範圍類設定用大面積的 ＋／－ 按鍵，騎乘中比滑桿好按 */
   .stepper{display:flex;align-items:center;gap:12px}
   .stepper button{
     flex:0 0 72px;height:54px;background:none;border:1px solid #333;color:var(--ink);
@@ -1232,8 +1232,12 @@ $('gmapHere').addEventListener('click', () => { el.panel.classList.remove('show'
 $('gmapBack').addEventListener('click', () => { el.panel.classList.remove('show'); openGmap('back'); });
 $('gear').addEventListener('click', () => el.panel.classList.add('show'));
 $('close').addEventListener('click', () => el.panel.classList.remove('show'));
-$('thr').addEventListener('input', e => { S.thr = +e.target.value; $('thrV').textContent = S.thr; savePrefs(); update(); });
-$('lk').addEventListener('input', e => { S.look = +e.target.value; $('lkV').textContent = S.look; savePrefs(); update(); });
+$('thr').addEventListener('input', e => {
+  S.thr = +e.target.value; $('thrV').textContent = S.thr; savePrefs(); update();
+});
+$('lk').addEventListener('input', e => {
+  S.look = +e.target.value; $('lkV').textContent = S.look; savePrefs(); update();
+});
 function applyRange(){
   const i = RANGES.indexOf(S.range);
   $('rgV').textContent = S.range;
