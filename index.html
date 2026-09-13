@@ -120,6 +120,10 @@
     font-size:13px;border-radius:7px;padding:9px 14px;
   }
   body.off .foot button{border-color:rgba(255,255,255,.45)}
+  .fbtns{display:flex;gap:8px}
+  .foot button:disabled{opacity:.4}
+  /* 偏離時「導航回軌跡」是當下最該按的鍵，反白突顯 */
+  body.off #gmap{background:#fff;color:var(--alarm);border-color:#fff;font-weight:650}
 
   /* ---------- 設定 ---------- */
   #panel{
@@ -186,7 +190,10 @@
 
 <div class="foot">
   <div id="remain">剩餘 –</div>
-  <button id="gear">設定</button>
+  <div class="fbtns">
+    <button id="gmap" disabled>地圖</button>
+    <button id="gear">設定</button>
+  </div>
 </div>
 
 <!-- 設定 -->
@@ -206,6 +213,10 @@
   <div class="toggles">
     <button id="snd" class="on">警告音 開</button>
     <button id="rev">反轉軌跡方向</button>
+  </div>
+  <div class="toggles">
+    <button id="gmapHere">Google 地圖：目前位置</button>
+    <button id="gmapBack">Google 地圖：導航回軌跡</button>
   </div>
   <div class="toggles">
     <button id="resync">重新定位到軌跡</button>
@@ -260,7 +271,7 @@ const el = {
   start:$('start'), picker:$('picker'), status:$('status'), go:$('go'),
   dir:$('dir'), dirText:$('dirText'),
   dev:$('dev'), devLabel:$('devLabel'), spd:$('spd'), arrow:$('arrow'),
-  banner:$('banner'), remain:$('remain'), panel:$('panel'),
+  banner:$('banner'), remain:$('remain'), panel:$('panel'), gmap:$('gmap'),
   map:$('map'), mapTag:$('mapTag'), hint:$('hint')
 };
 const ctx = el.map.getContext('2d');
@@ -558,6 +569,32 @@ function drawMap(){
   ctx.closePath(); ctx.fill();
 }
 
+/* ======================= Google 地圖 ======================= */
+// 箭頭只知道直線方向，可能指著一條河或一道牆的另一邊。真的迷路時，
+// 「照現有道路怎麼回去」要交給 Google 地圖。用官方 universal URL，
+// 手機上會直接開啟 Google 地圖 App。
+function gmapUrl(kind){
+  if (!S.pos) return null;
+  const me = `${S.pos.lat.toFixed(6)},${S.pos.lon.toFixed(6)}`;
+  if (kind === 'back'){
+    if (!S.track.length || !S.near) return null;
+    const t = pointAt(S.along);
+    return 'https://www.google.com/maps/dir/?api=1'
+      + `&origin=${me}&destination=${t.lat.toFixed(6)},${t.lon.toFixed(6)}`
+      + '&travelmode=bicycling';
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${me}`;
+}
+function openGmap(kind){
+  const url = gmapUrl(kind);
+  if (!url){
+    el.banner.textContent = S.pos ? '尚未載入軌跡' : '尚未取得定位';
+    return;
+  }
+  // 開新分頁，本頁保持運作；回來時 visibilitychange 會重新取得 Wake Lock
+  window.open(url, '_blank', 'noopener');
+}
+
 /* ======================= 主迴圈 ======================= */
 function setArrow(deg){
   // 轉到最近的等效角度，避免 359→1 時整圈迴轉
@@ -622,6 +659,8 @@ function update(){
   el.remain.textContent = remain > 1000
     ? `剩餘 ${(remain/1000).toFixed(1)} km`
     : `剩餘 ${Math.round(remain)} m`;
+  el.gmap.disabled = false;
+  el.gmap.textContent = off ? '導航回軌跡' : '地圖';
 
   if (h === null) el.banner.textContent = '等待方向：先往前騎一段';
   else if (off) {
@@ -726,6 +765,10 @@ $('revStart').addEventListener('click', toggleDirection);
 $('rev').addEventListener('click', () => { toggleDirection(); el.panel.classList.remove('show'); });
 
 /* 設定 */
+// 底部的地圖鍵隨狀態切換用途：在軌上看周邊，偏離時導航回最近的軌跡點
+$('gmap').addEventListener('click', () => openGmap(S.off ? 'back' : 'here'));
+$('gmapHere').addEventListener('click', () => { el.panel.classList.remove('show'); openGmap('here'); });
+$('gmapBack').addEventListener('click', () => { el.panel.classList.remove('show'); openGmap('back'); });
 $('gear').addEventListener('click', () => el.panel.classList.add('show'));
 $('close').addEventListener('click', () => el.panel.classList.remove('show'));
 $('thr').addEventListener('input', e => { S.thr = +e.target.value; $('thrV').textContent = S.thr; savePrefs(); update(); });
