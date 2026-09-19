@@ -44,10 +44,14 @@
   .route .state{font-size:13px;color:var(--dim);min-height:1.4em}
   .route .state.ok{color:var(--ok)}
   .route .state.now{color:var(--warn)}
-  .route a.go{
-    display:block;text-align:center;margin-top:8px;padding:16px;border-radius:10px;
-    background:var(--ink);color:var(--bg);font-size:18px;font-weight:600;text-decoration:none;
+  .route .btns{display:flex;gap:10px;margin-top:8px}
+  .route .btns>*{
+    flex:1;display:block;text-align:center;padding:16px;border-radius:10px;
+    font-size:18px;font-weight:600;text-decoration:none;cursor:pointer;
   }
+  .route a.go{background:var(--ink);color:var(--bg)}
+  .route button.dl{background:#161616;color:var(--ink);border:1px solid #444;font-family:inherit}
+  .route button.dl:disabled{opacity:.4}
   /* 兩段式：未同意只看得到聲明；同意後只看得到路線 */
   body:not(.acked) #step2{display:none}
   body.acked #step1{display:none}
@@ -57,12 +61,6 @@
   }
   .again{font-size:13px;color:var(--dim);margin:6px 0 0}
   .again a{color:#aaa}
-  button.big{
-    width:100%;margin-top:14px;padding:14px;border-radius:10px;border:1px solid #444;
-    background:#161616;color:var(--ink);font-size:15px;cursor:pointer;
-  }
-  button.big:disabled{opacity:.4}
-  #pre{font-size:13px;color:var(--dim);margin-top:8px;min-height:1.4em}
   footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--dim)}
   footer a{color:#aaa}
   code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;color:#cfcfcf}
@@ -85,7 +83,7 @@
 <ol>
   <li><b>安全第一。</b>騎乘中不要低頭操作手機。箭頭用餘光看，警告靠聲音與震動。要調整設定，請先停車。</li>
   <li><b>現場指示優先。</b>交管人員、指揮、路標、補給站的安排，永遠優先於 App 的箭頭。</li>
-  <li><b>出發前先在有網路的地方點開路線一次</b>（或按下方「預先下載」），路線會存進手機，山區沒訊號也開得起來。</li>
+  <li><b>出發前先在有網路的地方按「下載」</b>，路線會存進手機，山區沒訊號也開得起來。「開啟」則是進入主程式開始導航。</li>
   <li><b>建議加入主畫面。</b>Chrome：選單 →「加入主畫面」；Safari：分享 →「加入主畫面」。全螢幕、不被瀏覽器列擋到。</li>
   <li><b>授權定位為「使用期間允許」。</b>iOS 按「開始」後會再詢問動作與方向權限，請允許。手機固定在車把上、螢幕朝上。</li>
   <li><b>電力。</b>全程亮螢幕，35 km 約 1–2 小時、64 km 約 2–4 小時、中橫 143 km 約 6–8 小時，長距離請帶行動電源。</li>
@@ -101,8 +99,6 @@
 <section id="step2">
 <h2>選擇路線</h2>
 <div class="routes" id="routes"></div>
-<button class="big" id="preload">預先下載三條路線（需網路）</button>
-<p id="pre"></p>
 <p class="again">已同意測試版聲明。<a href="#" id="reread">重看聲明與注意事項</a></p>
 </section>
 
@@ -145,10 +141,29 @@ const cards = ROUTES.map(r => {
     <div class="name">${r.name}</div>
     <div class="meta">${r.desc}</div>
     <div class="state">檢查中…</div>
-    <a class="go" href="../?gpx=act1/${r.file}">開啟這條路線</a>`;
+    <div class="btns">
+      <button class="dl">下載</button>
+      <a class="go" href="../?gpx=act1/${r.file}">開啟</a>
+    </div>`;
   $('routes').appendChild(el);
-  return { r, el, state: el.querySelector('.state') };
+  const dl = el.querySelector('.dl');
+  dl.addEventListener('click', async () => {
+    dl.disabled = true; dl.textContent = '下載中…';
+    try { await cacheRoute(r.file); dl.textContent = '已下載'; }
+    catch(e){ dl.textContent = '下載失敗，再試一次'; dl.disabled = false; }
+    refresh();
+  });
+  return { r, el, state: el.querySelector('.state'), dl };
 });
+
+/* ---------- 下載：直接寫進 SW 用的同一個 cache ----------
+   順便把主程式本體也放進去，只逛過入口頁的人到了山上也開得起來。 */
+const CORE = ['../', '../index.html', '../manifest.webmanifest', '../icon.svg', '../icon-maskable.svg'];
+async function cacheRoute(file){
+  const c = await caches.open(CACHE);
+  await c.addAll(CORE).catch(()=>{});
+  await c.add(file);
+}
 
 /* ---------- 前後狀態：哪幾條已經進了離線快取、主程式目前載入的是哪一條 ----------
    主程式讀過的 GPX 會由 Service Worker 存進 Cache；這裡直接查 Cache API，
@@ -177,36 +192,14 @@ async function refresh(){
       const when = mins < 60 ? `${mins} 分鐘前` : (mins < 1440 ? `${Math.round(mins/60)} 小時前` : `${Math.round(mins/1440)} 天前`);
       c.state.textContent = `● 主程式目前載入的路線（${when}）` + (ok ? '・已可離線' : '');
     }
-    else c.state.textContent = ok ? '✓ 已下載，可離線使用' : '尚未下載：開啟一次或按下方預先下載';
+    else c.state.textContent = ok ? '✓ 已下載，可離線使用' : '尚未下載：按「下載」存進手機，山區沒訊號也開得起來';
+    if (ok){ c.dl.textContent = '已下載'; c.dl.disabled = true; }
   }
 }
 refresh();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
 // 從主程式按「返回」回來多半是 bfcache 還原，不會重跑腳本，靠 pageshow 補刷新
 window.addEventListener('pageshow', refresh);
-
-/* ---------- 預先下載：直接寫進 SW 用的同一個 cache ---------- */
-$('preload').addEventListener('click', async () => {
-  const btn = $('preload'), out = $('pre');
-  btn.disabled = true; out.textContent = '下載中…';
-  const okList = [], bad = [];
-  try {
-    const c = await caches.open(CACHE);
-    // 順便把主程式本體也放進去，只逛過入口頁的人到了山上也開得起來
-    await c.addAll(['../', '../index.html', '../manifest.webmanifest', '../icon.svg', '../icon-maskable.svg']).catch(()=>{});
-    for (const r of ROUTES){
-      try { await c.add(r.file); okList.push(r.name); }
-      catch(e){ bad.push(r.name); }
-    }
-    out.textContent = bad.length
-      ? `完成 ${okList.length} 條，失敗：${bad.join('、')}（請確認網路後再按一次）`
-      : `三條路線都已存進手機，沒訊號也開得起來。`;
-  } catch(e){
-    out.textContent = '這個瀏覽器不支援離線快取（私密瀏覽或舊版瀏覽器）。仍可上線使用，但山區沒訊號時開不起來。';
-  }
-  btn.disabled = false;
-  refresh();
-});
 
 /* ---------- 離線：註冊主程式的 Service Worker（scope 為上一層） ---------- */
 if ('serviceWorker' in navigator && location.protocol !== 'file:'){
@@ -221,7 +214,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:'){
     location.reload();
   });
 }
-$('ver').textContent = '入口頁版本 260919b';
+$('ver').textContent = '入口頁版本 260919c';
 })();
 </script>
 </body>
