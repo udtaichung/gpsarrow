@@ -34,11 +34,6 @@
   ol{padding-left:1.4em}
   ol li{margin:8px 0}
   ol li b{color:var(--ink)}
-  label.ack{
-    display:flex;gap:12px;align-items:flex-start;margin:22px 0 6px;
-    border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:15px;cursor:pointer;
-  }
-  label.ack input{width:22px;height:22px;flex:none;margin-top:2px;accent-color:var(--ok)}
   .routes{display:flex;flex-direction:column;gap:12px;margin-top:12px}
   .route{
     border:1px solid #333;border-radius:12px;background:var(--card);padding:16px;
@@ -53,9 +48,15 @@
     display:block;text-align:center;margin-top:8px;padding:16px;border-radius:10px;
     background:var(--ink);color:var(--bg);font-size:18px;font-weight:600;text-decoration:none;
   }
-  body:not(.acked) .route a.go{pointer-events:none;opacity:.25}
-  body:not(.acked) #gate{display:block}
-  #gate{display:none;font-size:13px;color:var(--warn);margin:8px 0 0}
+  /* 兩段式：未同意只看得到聲明；同意後只看得到路線 */
+  body:not(.acked) #step2{display:none}
+  body.acked #step1{display:none}
+  button.agree{
+    width:100%;margin-top:22px;padding:18px;border-radius:10px;border:0;
+    background:var(--ink);color:var(--bg);font-size:18px;font-weight:600;cursor:pointer;
+  }
+  .again{font-size:13px;color:var(--dim);margin:6px 0 0}
+  .again a{color:#aaa}
   button.big{
     width:100%;margin-top:14px;padding:14px;border-radius:10px;border:1px solid #444;
     background:#161616;color:var(--ink);font-size:15px;cursor:pointer;
@@ -73,6 +74,7 @@
   <small>2026 捷安特自行車嘉年華 — 路線導航實測入口</small>
 </h1>
 
+<section id="step1">
 <div class="box">
   <p><b>這不是官方 App。</b>本程式為個人開發的<b>測試版</b>，與捷安特、活動主辦單位或任何官方單位<b>無關</b>，也未經其認可。路線檔取自主辦單位公開的 GPX，若與現場公告不同，<b>一律以現場為準</b>。</p>
   <p><b>導航僅供參考。</b>程式可能出錯、GPS 可能飄移、手機可能當機或沒電。騎乘安全由使用者自行判斷與負責，開發者不對因使用本程式造成的任何損失負責。</p>
@@ -92,13 +94,17 @@
   <li><b>請幫忙記錄。</b>箭頭指錯、亂叫、該叫沒叫，請記下大概地點與時間，活動後回報。這是測試版，你的回報就是下一版。</li>
 </ol>
 
-<label class="ack"><input type="checkbox" id="ack"><span>我已閱讀以上聲明與注意事項，了解這是非官方的測試版程式，並自行負責騎乘安全。</span></label>
-<p id="gate">勾選後才能開啟路線。</p>
+<button class="agree" id="agree">我已閱讀並同意，進入路線選擇</button>
+<p class="again">按下即表示：了解這是非官方的測試版程式，導航僅供參考，並自行負責騎乘安全。</p>
+</section>
 
+<section id="step2">
 <h2>選擇路線</h2>
 <div class="routes" id="routes"></div>
 <button class="big" id="preload">預先下載三條路線（需網路）</button>
 <p id="pre"></p>
+<p class="again">已同意測試版聲明。<a href="#" id="reread">重看聲明與注意事項</a></p>
+</section>
 
 <footer>
   <p>主程式可自行選擇其他 GPX：<a href="../">軌跡箭頭</a>　·　<a href="https://github.com/udtaichung/gpsarrow#readme">說明文件</a></p>
@@ -118,14 +124,17 @@ const ACK_KEY = 'gpsarrow.act1.ack';
 const $ = id => document.getElementById(id);
 
 /* ---------- 免責勾選 ---------- */
-const ack = $('ack');
-try { if (localStorage.getItem(ACK_KEY)) ack.checked = true; } catch(e){}
-const syncAck = () => {
-  document.body.classList.toggle('acked', ack.checked);
-  try { ack.checked ? localStorage.setItem(ACK_KEY, String(Date.now())) : localStorage.removeItem(ACK_KEY); } catch(e){}
+let acked = false;
+try { acked = !!localStorage.getItem(ACK_KEY); } catch(e){}
+const setAck = v => {
+  acked = v;
+  document.body.classList.toggle('acked', v);
+  try { v ? localStorage.setItem(ACK_KEY, String(Date.now())) : localStorage.removeItem(ACK_KEY); } catch(e){}
+  window.scrollTo(0, 0);
 };
-ack.addEventListener('change', syncAck);
-syncAck();
+$('agree').addEventListener('click', () => setAck(true));
+$('reread').addEventListener('click', e => { e.preventDefault(); setAck(false); });
+document.body.classList.toggle('acked', acked);
 
 /* ---------- 路線卡 ---------- */
 const cards = ROUTES.map(r => {
@@ -202,8 +211,17 @@ $('preload').addEventListener('click', async () => {
 /* ---------- 離線：註冊主程式的 Service Worker（scope 為上一層） ---------- */
 if ('serviceWorker' in navigator && location.protocol !== 'file:'){
   window.addEventListener('load', () => navigator.serviceWorker.register('../sw.js').catch(()=>{}));
+  // 快取先回舊版、背景抓到新版時 SW 會通知；入口頁沒有騎乘狀態，直接重載一次即可
+  navigator.serviceWorker.addEventListener('message', ev => {
+    if (!ev.data || ev.data.type !== 'gpsarrow-updated') return;
+    try {
+      if (sessionStorage.getItem('gpsarrow.act1.reloaded')) return;
+      sessionStorage.setItem('gpsarrow.act1.reloaded', '1');
+    } catch(e){}
+    location.reload();
+  });
 }
-$('ver').textContent = '入口頁版本 260919';
+$('ver').textContent = '入口頁版本 260919b';
 })();
 </script>
 </body>
