@@ -484,16 +484,30 @@ const COMPASS16 = ['北','北北東','東北','東北東','東','東南東','東
 function compassName(deg){ return COMPASS16[Math.round(((deg%360)+360)%360 / 22.5) % 16]; }
 
 /* ======================= 軌跡比對 ======================= */
-// 回傳距離最近的線段投影點
-function nearestOnTrack(pos, from, to){
-  let best = {d:Infinity, i:from, t:0};
+// 去回同一條路的路線（中橫谷關：62% 的路段 25 m 內就有反向的軌跡），
+// 只比距離會有一半機率吸到回程那條線，箭頭指向身後。第二判別是方向：
+// 疊合的兩段軌跡向量正好相反，而我們對行進方向本來就有連續解讀。
+// 與行進方向相差超過 SNAP_OPP_DEG 的線段加一段距離罰分，同距離時一定
+// 選同向那條；真正偏離時罰分蓋不過距離差，仍會吸到最近點。
+const SNAP_OPP_DEG = 120;
+const SNAP_PENALTY = 50;
+// 回傳距離最近的線段投影點。head 為行進方向（可為 null，此時只比距離）。
+function nearestOnTrack(pos, from, to, head){
+  let best = {d:Infinity, score:Infinity, i:from, t:0, opp:false};
+  const hasHead = head !== null && head !== undefined;
   for (let i=from; i<to; i++){
     const A = proj(S.track[i], pos), B = proj(S.track[i+1], pos);
     const dx = B.x-A.x, dy = B.y-A.y, L2 = dx*dx + dy*dy;
     let t = L2 > 0 ? (-(A.x*dx + A.y*dy))/L2 : 0;
     t = clamp(t, 0, 1);
     const d = Math.hypot(A.x + t*dx, A.y + t*dy);
-    if (d < best.d) best = {d, i, t};
+    let opp = false;
+    if (hasHead && L2 > 0){
+      const brg = Math.atan2(dx, dy)/D2R;            // 平面上 x 向東、y 向北
+      opp = Math.abs(wrap180(brg - head)) > SNAP_OPP_DEG;
+    }
+    const score = d + (opp ? SNAP_PENALTY : 0);
+    if (score < best.score) best = {d, score, i, t, opp};
   }
   // 偏在軌跡的哪一側（正 = 右側）。之後要靠它補償「軌跡在路中心、
   // 人卻靠路邊騎」造成的固定橫向偏移。
@@ -502,6 +516,14 @@ function nearestOnTrack(pos, from, to){
   const px = A.x + best.t*dx, py = A.y + best.t*dy;
   best.side = L > 0 ? (py*dx - px*dy)/L : 0;
   return best;
+}
+// 給吸附用的行進方向：只在確定有在移動時才給（GPS 航向仍新鮮，或位移
+// 推得出方向）。靜止時 heading() 會退回電子羅盤，車把上的羅盤不可靠，
+// 拿它去否決線段反而會鎖錯。
+function snapHeading(){
+  const moving = (S.gpsHead !== null && S.posAt - S.gpsHeadAt < 8000)
+    || traceHeading(5000) !== null;
+  return moving ? heading() : null;
 }
 // 自 p 沿方位 brg 前進 m 公尺（m 可為負）
 function movePoint(p, brg, m){
@@ -1039,7 +1061,11 @@ function update(){
     const here = S.cum[S.idx];
     from = idxAt(here - 400); to = idxAt(here + 1500);
   }
-  const near = nearestOnTrack(S.pos, from, Math.max(from+1, to));
+  const sh = snapHeading();
+  let near = nearestOnTrack(S.pos, from, Math.max(from+1, to), sh);
+  // 鎖定窗裡最近的線段卻與行進方向相反：多半是鎖到另一側了（環狀路線
+  // 在起點吸到終點段、去回同路吸到回程），這一輪改全域重找。
+  if (S.locked && near.opp) near = nearestOnTrack(S.pos, 0, S.track.length-1, sh);
   // 離軌太遠代表可能整段跑掉，下一輪重新全域搜尋
   S.locked = near.d < 300;
   S.idx = near.i;
