@@ -585,6 +585,14 @@ function turnSpan(){
   const v = S.spdAvg !== null ? S.spdAvg : S.speed;
   return clamp(v * TURN_LEAD_S, TURN_SPAN_MIN, TURN_SPAN_MAX);
 }
+// 下格顯示範圍也用同一個秒數換算，滑桿值當下限、200 m 當上限：慢騎時
+// 與滑桿設定完全相同，速度快到 12 秒路程超過滑桿值才放大，轉彎標記才
+// 不會落在畫面外（提示距離最遠 150 m，預設顯示只有 100 m）。以 5 m 取整，
+// 標籤與刻度不會每公尺跳一次。
+function mapRange(){
+  const v = S.spdAvg !== null ? S.spdAvg : S.speed;
+  return clamp(Math.round(v * TURN_LEAD_S / 5) * 5, S.range, RANGES[RANGES.length-1]);
+}
 // 下界目標 60°，平均弦線量測會系統性低估約 2–3°（實測 90° 量到
 // 88°、120° 量到 118°），因此下界外擴 3° 到 57°，60° 的折角才不會漏。
 const TURN_MIN      = 57;   // ≈ 60°（90° − 30°）
@@ -869,7 +877,9 @@ function drawMap(){
     return;
   }
 
-  const rng = S.range;
+  const rng = mapRange();
+  const tag = `前方 ${rng} m`;
+  if (el.mapTag.textContent !== tag) el.mapTag.textContent = tag;
   const cx = W/2, cy = H*0.80;              // 騎士固定在下方，前方視野較大
   const scale = (H*0.76) / rng;
   const hr = S.mapHead * D2R, sh = Math.sin(hr), ch = Math.cos(hr);
@@ -1318,7 +1328,7 @@ function applyRange(){
   $('rgNow').textContent = S.range + ' m';
   $('rgDn').disabled = i <= 0;
   $('rgUp').disabled = i >= RANGES.length-1;
-  el.mapTag.textContent = `前方 ${S.range} m`;
+  el.mapTag.textContent = `前方 ${mapRange()} m`;
 }
 function stepRange(d){
   const i = clamp(RANGES.indexOf(S.range) + d, 0, RANGES.length-1);
