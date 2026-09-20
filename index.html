@@ -325,7 +325,7 @@ const S = {
   moving: false, held: null,      // 是否確定在移動；最後一個移動中算出的方向
   pos: null, posAt: 0, speed: 0,
   off: false, lastBeep: 0, offRuns: 0,
-  turn: null, lastTurnBeep: 0,
+  turn: null, lastTurnBeep: 0, turnSpan: 0, turnEnd: null, spdAvg: null,
   shown: 0, bin: null,
   near: null, along: 0, mapHead: 0
 };
@@ -433,6 +433,7 @@ function loadTrack(pts){
   for (let i=1; i<pts.length; i++) S.cum[i] = S.cum[i-1] + haversine(pts[i-1], pts[i]);
   S.total = S.cum[S.cum.length-1];
   S.idx = 0; S.locked = false; S.near = null; S.along = 0;
+  S.turn = null; S.turnEnd = null;
 }
 // 原始點序另外保存，反轉可以無限次來回切換而不失真
 function setTrack(pts, name){ S.raw = pts; applyDirection(); if (name !== undefined) saveTrack(name); }
@@ -573,7 +574,17 @@ function polyline(d0, d1){
 // 關鍵是不能用固定長度的視窗量角度——一個 R=50 m 的 90° 彎弧長 78 m，
 // 在 40 m 視窗內只量到 46°，會被漏掉。必須先把彎當成一個完整的段落
 // 辨識出來（連續同向轉動的區段），再量它的總轉角。
-const TURN_SPAN     = 50;   // 彎起點需落在前方多少公尺內才提示
+// 提示距離隨速度換算：走路時 50 m 有 36 秒可反應，騎到 25 km/h 只剩 7 秒。
+// 改成「提前 TURN_LEAD_S 秒」，夾在上下限之間：15 km/h → 60 m（下限），
+// 25 km/h → 83 m，30 km/h → 100 m，45 km/h 下坡 → 150 m（上限）。
+// 速度用平滑值（S.spdAvg），單筆抖動不會讓提示距離跳、轉彎狀態閃。
+const TURN_LEAD_S   = 12;   // 提前幾秒提示
+const TURN_SPAN_MIN = 60;   // 提示距離下限（公尺）
+const TURN_SPAN_MAX = 150;  // 提示距離上限（公尺）
+function turnSpan(){
+  const v = S.spdAvg !== null ? S.spdAvg : S.speed;
+  return clamp(v * TURN_LEAD_S, TURN_SPAN_MIN, TURN_SPAN_MAX);
+}
 // 下界目標 60°，平均弦線量測會系統性低估約 2–3°（實測 90° 量到
 // 88°、120° 量到 118°），因此下界外擴 3° 到 57°，60° 的折角才不會漏。
 const TURN_MIN      = 57;   // ≈ 60°（90° − 30°）
@@ -584,7 +595,7 @@ const TURN_STEP     = 5;    // 取樣步長
 const TURN_CHORD    = 15;   // 計算方位的弦線半長（見 trackBearingAt）
 const TURN_STRAIGHT = 2.5;  // 每 5 m 轉不到此角度視為直行（≈ 半徑 115 m 以上）
 const TURN_GAP      = 3;    // 彎中容許連續 3 個取樣（15 m）接近直行
-const TURN_SCAN     = 200;  // 往前取樣總長，需容納得下整個彎
+const TURN_SCAN     = 300;  // 往前取樣總長，需容納得下提示距離上限再加整個彎
 // 右轉標記的綠色：亮度 230（Rec.709 亮度 Y' = 0.2126R + 0.7152G + 0.0722B）。
 // 綠色分量開滿 255 只到 182，其餘由等量的 R/B 補足以維持純綠色相：
 //   0.2126×167 + 0.7152×255 + 0.0722×167 = 229.9
@@ -611,6 +622,8 @@ function turnAhead(from, holding){
   if (S.total - from < 20) return null;
   const minDeg = holding ? TURN_HOLD_MIN : TURN_MIN;
   const maxDeg = holding ? TURN_HOLD_MAX : TURN_MAX;
+  // 已在提示中：距離不隨減速縮回去，否則下坡煞車進彎，提示會先熄再亮、響兩次
+  const span = holding ? Math.max(turnSpan(), S.turnSpan) : turnSpan();
 
   // 沿軌跡取一排方位，差分得到每 5 m 的轉動量
   const bs = [];
@@ -631,11 +644,11 @@ function turnAhead(from, holding){
     const v = dd[k];
     const s = Math.abs(v) < TURN_STRAIGHT ? 0 : Math.sign(v);
     if (cur){
-      if (s === cur.s){ cur.sum += v; cur.gap = 0; }
+      if (s === cur.s){ cur.sum += v; cur.gap = 0; cur.end = k; }
       else if (s === 0){ if (++cur.gap > TURN_GAP){ runs.push(cur); cur = null; } }
-      else { runs.push(cur); cur = {s, sum:v, start:k, gap:0}; }
+      else { runs.push(cur); cur = {s, sum:v, start:k, end:k, gap:0}; }
     } else if (s !== 0){
-      cur = {s, sum:v, start:k, gap:0};
+      cur = {s, sum:v, start:k, end:k, gap:0};
     }
   }
   if (cur) runs.push(cur);
@@ -643,10 +656,11 @@ function turnAhead(from, holding){
   // runs 已依距離排序，取最近且落在提示範圍內的那一個
   for (const r of runs){
     const dist = r.start*TURN_STEP;
-    if (dist > TURN_SPAN) break;
+    if (dist > span) break;
     const a = Math.abs(r.sum);
     if (a >= minDeg && a <= maxDeg){
-      return {deg: r.sum, dir: r.sum > 0 ? 'R' : 'L', dist};
+      // end：彎尾的沿軌里程，接近與過彎期間都不變，用來辨識「是不是同一個彎」
+      return {deg: r.sum, dir: r.sum > 0 ? 'R' : 'L', dist, end: from + (r.end+1)*TURN_STEP};
     }
   }
   return null;
@@ -681,6 +695,8 @@ function onPosition(p){
   S.posAt = Date.now();
   S.speed = Number.isFinite(c.speed) && c.speed >= 0 ? c.speed : 0;
   if (Number.isFinite(c.speed) && c.speed >= 0) S.hasSpeed = true;
+  // 平滑速度（指數平均，1 Hz 下時間常數約 3 秒），給隨速度換算的參數用
+  S.spdAvg = S.spdAvg === null ? S.speed : S.spdAvg*0.7 + S.speed*0.3;
   // 騎乘中 GPS 航向遠比電子羅盤可靠（車把上的手機受金屬與震動干擾）
   if (Number.isFinite(c.heading) && S.speed > 1.2){
     S.gpsHead = c.heading; S.gpsHeadAt = S.posAt;
@@ -1107,13 +1123,22 @@ function update(){
   document.body.classList.toggle('off', off);
 
   // 前方轉彎：偏離時不提示（當下要處理的是回到軌跡，不是下一個彎）
-  const turn = off ? null : turnAhead(along, !!S.turn);
-  const turnRise = !!turn && !S.turn;   // 只在「剛偵測到」時響一次
+  // 「提示中」看的是彎尾里程有沒有騎過，不看上一輪有沒有偵測到：長緩彎
+  // 每 5 m 轉 2.6°，在直行門檻邊緣抖，偵測會瞬間斷掉，若以此判斷會重複響。
+  // 騎過彎尾之後回到嚴格門檻重新偵測，所以 S 彎、連續彎的第二個彎會各自
+  // 響一次；舊做法「提示中」被下一個小擺動一直接續、從未歸零，第二個彎
+  // 從來沒響過（liv35 模擬：38 個彎之外還有 22 個這種被吞掉的）。
+  if (off) S.turnEnd = null;                   // 偏離後回來，該彎重新提示
+  const holding = S.turnEnd !== null && along <= S.turnEnd;
+  const turn = off ? null : turnAhead(along, holding);
+  const turnRise = !!turn && !holding;         // 只在「剛偵測到」時響一次
+  if (turnRise){ S.turnSpan = turnSpan(); S.turnEnd = turn.end; }
   S.turn = turn;
   document.body.classList.toggle('turn', !!turn);          // 對比用
   document.body.classList.toggle('turnR', !!turn && turn.dir === 'R');
   document.body.classList.toggle('turnL', !!turn && turn.dir === 'L');
-  if (turnRise && Date.now() - S.lastTurnBeep > 6000){
+  // 冷卻只擋真正的抖動；連續彎的第二聲要能出來，所以只留 2 秒
+  if (turnRise && Date.now() - S.lastTurnBeep > 2000){
     S.lastTurnBeep = Date.now();
     turnBeep(turn.dir);
     if (navigator.vibrate) navigator.vibrate(90);
