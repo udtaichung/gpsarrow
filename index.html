@@ -97,6 +97,8 @@
   }
   #arrow .ret path{stroke-width:7}
   body.stale #arrow path{fill:#4a4a4a;stroke:#4a4a4a}
+  /* 靜止保持：方向是凍結的最後一筆，不是即時的，稍微變淡以示區別 */
+  body.hold #arrow{opacity:.55}
   body.turn.stale #arrow path{fill:rgba(255,255,255,.45);stroke:rgba(255,255,255,.45)}
   /* 紅屏上灰箭頭幾乎看不見，改用半透明白：仍表示方向不可靠，但讀得到 */
   body.off.stale #arrow path{fill:rgba(255,255,255,.45);stroke:rgba(255,255,255,.45)}
@@ -319,7 +321,8 @@ const S = {
   thr: 25, look: 60, range: 100, sound: true, mapApp: true,
   lane: 3, side: 0, smooth: 5, trace: [], hhist: [],
   gpsHead: null, gpsHeadAt: 0,
-  compass: null,
+  compass: null, hasSpeed: false,
+  moving: false, held: null,      // 是否確定在移動；最後一個移動中算出的方向
   pos: null, posAt: 0, speed: 0,
   off: false, lastBeep: 0, offRuns: 0,
   turn: null, lastTurnBeep: 0,
@@ -517,13 +520,12 @@ function nearestOnTrack(pos, from, to, head){
   best.side = L > 0 ? (py*dx - px*dy)/L : 0;
   return best;
 }
-// 給吸附用的行進方向：只在確定有在移動時才給（GPS 航向仍新鮮，或位移
-// 推得出方向）。靜止時 heading() 會退回電子羅盤，車把上的羅盤不可靠，
-// 拿它去否決線段反而會鎖錯。
+// 給吸附用的行進方向：移動中給即時方向，靜止時給凍結的最後方向（停在
+// 去回同路的路段上，沒有方向就可能吸到反向那條，箭頭會突然指向身後）。
+// 只有「從頭到現在還沒動過」時 heading() 才會是電子羅盤，車把上的羅盤
+// 不可靠，那時不拿它否決線段。
 function snapHeading(){
-  const moving = (S.gpsHead !== null && S.posAt - S.gpsHeadAt < 8000)
-    || traceHeading(5000) !== null;
-  return moving ? heading() : null;
+  return (S.moving || S.held !== null) ? heading() : null;
 }
 // 自 p 沿方位 brg 前進 m 公尺（m 可為負）
 function movePoint(p, brg, m){
@@ -678,16 +680,31 @@ function onPosition(p){
   S.pos = {lat:c.latitude, lon:c.longitude};
   S.posAt = Date.now();
   S.speed = Number.isFinite(c.speed) && c.speed >= 0 ? c.speed : 0;
+  if (Number.isFinite(c.speed) && c.speed >= 0) S.hasSpeed = true;
   // 騎乘中 GPS 航向遠比電子羅盤可靠（車把上的手機受金屬與震動干擾）
   if (Number.isFinite(c.heading) && S.speed > 1.2){
     S.gpsHead = c.heading; S.gpsHeadAt = S.posAt;
   }
   S.trace.push({lat:c.latitude, lon:c.longitude, t:S.posAt});
   while (S.trace.length && S.posAt - S.trace[0].t > TRACE_KEEP) S.trace.shift();
-  const rh = rawHeading();
-  if (rh !== null) S.hhist.push({h:rh, t:S.posAt});
   while (S.hhist.length && S.posAt - S.hhist[0].t > TRACE_KEEP) S.hhist.shift();
+  // 靜止時方向歷史不再推入：停下來 GPS 位置仍在抖，位移推算會算出純雜訊
+  // 的方向，電子羅盤在車把上也會漂；這些進了歷史，起步後還得花幾秒稀釋。
+  S.moving = isMoving();
+  if (S.moving){
+    const rh = rawHeading();
+    if (rh !== null) S.hhist.push({h:rh, t:S.posAt});
+    const h = heading();
+    if (h !== null) S.held = h;
+  }
   update();
+}
+
+// 是否確定在移動。有給速度的裝置以 GPS 速度為準：它是都卜勒推算的，
+// 不受位置抖動影響，停下來就是 0。沒給速度的裝置才退回位移推算。
+function isMoving(){
+  if (S.hasSpeed) return S.speed > 1.2;
+  return traceHeading(5000) !== null;
 }
 
 // 以前幾秒的「位移」推算行進方向，比 GPS 單次回報的 heading 平穩得多。
@@ -721,13 +738,18 @@ function rawHeading(){
   if (S.gpsHead !== null && S.posAt - S.gpsHeadAt < 8000) return S.gpsHead;
   const th = traceHeading(Math.max(5000, S.smooth*1000));
   if (th !== null) return th;
-  if (S.compass !== null) return S.compass;
+  // 電子羅盤只在「從頭到現在還沒動過」時用；一旦有過移動中的方向，
+  // 靜止時一律保持那一筆（見 heading()），不再退回車把上的羅盤。
+  if (S.compass !== null && S.held === null) return S.compass;
   return null;
 }
 // 平滑是對「方向」本身做加權平均，不是重新從位置推算方向。
 // 權重隨時間線性遞減（最新為 1、視窗邊緣為 0），重心落在視窗的 1/3 處，
 // 所以延遲約為視窗的 1/3 而非一半——同樣的平順度，反應快一倍。
 function heading(){
+  // 靜止保持：箭頭凍結在最後一個移動中的方向，直到再次起步。
+  // 代價是停下來掉頭再出發，箭頭要等起步後第一兩筆 GPS 航向才翻轉。
+  if (!S.moving && S.held !== null) return S.held;
   const last = S.hhist.length ? S.hhist[S.hhist.length-1] : null;
   if (!last) return rawHeading();
   if (S.smooth <= 0) return S.posAt - last.t < 8000 ? last.h : rawHeading();
@@ -1116,6 +1138,7 @@ function update(){
   }
 
   document.body.classList.toggle('stale', h === null);
+  document.body.classList.toggle('hold', h !== null && !S.moving);
   let rel = null;
   if (h !== null && haversine(S.pos, target) > 3){
     rel = wrap180(bearing(S.pos, target) - h);
