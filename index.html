@@ -185,7 +185,7 @@
 <section id="start">
   <div>
     <h1>軌跡箭頭</h1>
-    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–200 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方 50 公尺內有 60° 以上的轉彎，則要轉過去的那半邊轉暗藍並提示。</p>
+    <p>螢幕上方＝你的前進方向。上格箭頭指向前方的軌跡，下格顯示前方 30–500 公尺的軌跡形狀。偏離超過設定距離整片轉紅並震動；前方約 12 秒路程內有 60° 以上的轉彎，則要轉過去的那半邊轉暗藍並提示。</p>
   </div>
   <div class="file">
     <!-- 不設 accept：iOS 的檔案 App 依 UTI 過濾，.gpx 沒有註冊的 UTI，
@@ -331,7 +331,7 @@ const S = {
 };
 
 // 下格顯示範圍的級距：低段密（市區看轉彎細節），高段疏（郊區看大方向）
-const RANGES = [30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200];
+const RANGES = [30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200, 250, 300, 400, 500];
 // 路寬補償的級距：半個車道約 1.75 m，靠路邊騎大約 2–4 m
 const LANES = [0, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
 // 方向平滑的視窗長度（秒）。0 = 直接用 GPS 回報的 heading
@@ -374,7 +374,7 @@ function loadPrefs(){
   if ((Number.isFinite(p.v) ? p.v : 1) < 2 && p.thr === 40) S.thr = 25;
   if (Number.isFinite(p.look))  S.look  = clamp(p.look, 20, 200);
   // 舊版存的是 100–500，超出新範圍的值靠攏到最接近的級距
-  if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 200));
+  if (Number.isFinite(p.range)) S.range = nearestRange(clamp(p.range, 30, 500));
   if (Number.isFinite(p.lane))  S.lane  = nearestLane(clamp(p.lane, 0, 6));
   if (Number.isFinite(p.smooth)) S.smooth = nearestSmooth(clamp(p.smooth, 0, 12));
   if (typeof p.sound === 'boolean') S.sound = p.sound;
@@ -585,7 +585,7 @@ function turnSpan(){
   const v = S.spdAvg !== null ? S.spdAvg : S.speed;
   return clamp(v * TURN_LEAD_S, TURN_SPAN_MIN, TURN_SPAN_MAX);
 }
-// 下格顯示範圍也用同一個秒數換算，滑桿值當下限、200 m 當上限：慢騎時
+// 下格顯示範圍也用同一個秒數換算，滑桿值當下限、滑桿最大值當上限：慢騎時
 // 與滑桿設定完全相同，速度快到 12 秒路程超過滑桿值才放大，轉彎標記才
 // 不會落在畫面外（提示距離最遠 150 m，預設顯示只有 100 m）。以 5 m 取整，
 // 標籤與刻度不會每公尺跳一次。
