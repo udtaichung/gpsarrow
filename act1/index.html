@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="robots" content="noindex,nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="軌跡箭頭">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="../manifest.webmanifest">
+<link rel="icon" href="../icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../icon.svg">
+<title>軌跡箭頭 — 嘉年華實測</title>
+<style>
+  :root{ --ink:#fff; --bg:#000; --dim:#8a8a8a; --line:#262626; --warn:#ffb000; --ok:#8fdc8f; --card:#0e0e0e; }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html{background:var(--bg)}
+  body{
+    background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    font-variant-numeric:tabular-nums;line-height:1.65;
+    padding:calc(env(safe-area-inset-top) + 24px) calc(env(safe-area-inset-right) + 20px)
+            calc(env(safe-area-inset-bottom) + 40px) calc(env(safe-area-inset-left) + 20px);
+    max-width:40em;margin:0 auto;
+  }
+  h1{font-size:26px;font-weight:600;letter-spacing:-.01em;line-height:1.25}
+  h1 small{display:block;font-size:14px;font-weight:400;color:var(--dim);margin-top:6px}
+  h2{font-size:17px;font-weight:600;margin:32px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+  p,li{font-size:15px;color:#d6d6d6}
+  .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;border:1px solid var(--warn);color:var(--warn);vertical-align:middle;margin-left:6px}
+  .box{border:1px solid #4a3a00;background:#120f00;border-radius:10px;padding:14px 16px;margin:14px 0}
+  .box p{color:#f1e2b0}
+  .box p+p{margin-top:8px}
+  ol{padding-left:1.4em}
+  ol li{margin:8px 0}
+  ol li b{color:var(--ink)}
+  .routes{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+  .route{
+    border:1px solid #333;border-radius:12px;background:var(--card);padding:16px;
+    display:flex;flex-direction:column;gap:6px;
+  }
+  .route .name{font-size:18px;font-weight:600}
+  .route .meta{font-size:13px;color:var(--dim)}
+  .route .state{font-size:13px;color:var(--dim);min-height:1.4em}
+  .route .state.ok{color:var(--ok)}
+  .route .state.now{color:var(--warn)}
+  .route .btns{display:flex;gap:10px;margin-top:8px}
+  .route .btns>*{
+    flex:1;display:block;text-align:center;padding:16px;border-radius:10px;
+    font-size:18px;font-weight:600;text-decoration:none;cursor:pointer;
+  }
+  .route a.go{background:var(--ink);color:var(--bg)}
+  .route button.dl{background:#161616;color:var(--ink);border:1px solid #444;font-family:inherit}
+  .route button.dl:disabled{opacity:.4}
+  /* 兩段式：未同意只看得到聲明；同意後只看得到路線 */
+  body:not(.acked) #step2{display:none}
+  body.acked #step1{display:none}
+  button.agree{
+    width:100%;margin-top:22px;padding:18px;border-radius:10px;border:0;
+    background:var(--ink);color:var(--bg);font-size:18px;font-weight:600;cursor:pointer;
+  }
+  .again{font-size:13px;color:var(--dim);margin:6px 0 0}
+  .again a{color:#aaa}
+  footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--dim)}
+  footer a{color:#aaa}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.92em;color:#cfcfcf}
+</style>
+</head>
+<body>
+
+<h1>軌跡箭頭 <span class="tag">測試版</span>
+  <small>2026 捷安特自行車嘉年華 — 路線導航實測入口</small>
+</h1>
+
+<section id="step1">
+<div class="box">
+  <p><b>這不是官方 App。</b>本程式為個人開發的<b>測試版</b>，與捷安特、活動主辦單位或任何官方單位<b>無關</b>，也未經其認可。路線檔取自主辦單位公開的 GPX，若與現場公告不同，<b>一律以現場為準</b>。</p>
+  <p><b>導航僅供參考。</b>程式可能出錯、GPS 可能飄移、手機可能當機或沒電。騎乘安全由使用者自行判斷與負責，開發者不對因使用本程式造成的任何損失負責。</p>
+  <p><b>不收集任何資料。</b>所有計算都在你的手機上完成，沒有伺服器、沒有帳號、沒有追蹤。</p>
+</div>
+
+<h2>使用注意事項</h2>
+<ol>
+  <li><b>安全第一。</b>騎乘中不要低頭操作手機。箭頭用餘光看，警告靠聲音與震動。要調整設定，請先停車。</li>
+  <li><b>現場指示優先。</b>交管人員、指揮、路標、補給站的安排，永遠優先於 App 的箭頭。</li>
+  <li><b>出發前先在有網路的地方按「下載」</b>，路線會存進手機，山區沒訊號也開得起來。「開啟」則是進入主程式開始導航。</li>
+  <li><b>建議加入主畫面。</b>Chrome：選單 →「加入主畫面」；Safari：分享 →「加入主畫面」。全螢幕、不被瀏覽器列擋到。</li>
+  <li><b>授權定位為「使用期間允許」。</b>iOS 按「開始」後會再詢問動作與方向權限，請允許。手機固定在車把上、螢幕朝上。</li>
+  <li><b>電力。</b>全程亮螢幕，35 km 約 1–2 小時、64 km 約 2–4 小時、中橫 143 km 約 6–8 小時，長距離請帶行動電源。</li>
+  <li><b>「地圖」與「導航回軌跡」按鍵需要網路</b>，山區可能按了沒反應。下格的軌跡形狀不需網路。</li>
+  <li><b>三條都是環狀路線</b>，起終點同一處。起始畫面確認方向為「正向」即可，不必反轉。中橫谷關去回走同一條路，折返點附近箭頭可能短暫混亂，請以路面為準；若一直不對，開設定按「重新定位到軌跡」。</li>
+  <li><b>請幫忙記錄。</b>箭頭指錯、亂叫、該叫沒叫，請記下大概地點與時間，活動後回報。這是測試版，你的回報就是下一版。</li>
+</ol>
+
+<button class="agree" id="agree">我已閱讀並同意，進入路線選擇</button>
+<p class="again">按下即表示：了解這是非官方的測試版程式，導航僅供參考，並自行負責騎乘安全。</p>
+</section>
+
+<section id="step2">
+<h2>選擇路線</h2>
+<div class="routes" id="routes"></div>
+<p class="again">已同意測試版聲明。<a href="#" id="reread">重看聲明與注意事項</a></p>
+</section>
+
+<footer>
+  <p>主程式可自行選擇其他 GPX：<a href="../">軌跡箭頭</a>　·　<a href="https://github.com/udtaichung/gpsarrow#readme">說明文件</a></p>
+  <p id="ver"></p>
+</footer>
+
+<script>
+(() => {
+'use strict';
+const ROUTES = [
+  { file:'liv35.gpx',    name:'LIV DAY 運動組 35 km', desc:'官方 35 km，實測軌跡長 33.7 km，2264 點' },
+  { file:'liv64.gpx',    name:'LIV DAY 挑戰組 64 km', desc:'官方 64 km，實測軌跡長 63.0 km，4385 點' },
+  { file:'giantcup.gpx', name:'GIANT CUP 中橫谷關',    desc:'實測軌跡長 143.0 km，8988 點。去回同路，長時間亮螢幕請帶行動電源' },
+];
+const CACHE = 'gpsarrow-v1';           // 與 ../sw.js 的 VERSION 一致
+const ACK_KEY = 'gpsarrow.act1.ack';
+const $ = id => document.getElementById(id);
+
+/* ---------- 免責勾選 ---------- */
+let acked = false;
+try { acked = !!localStorage.getItem(ACK_KEY); } catch(e){}
+const setAck = v => {
+  acked = v;
+  document.body.classList.toggle('acked', v);
+  try { v ? localStorage.setItem(ACK_KEY, String(Date.now())) : localStorage.removeItem(ACK_KEY); } catch(e){}
+  window.scrollTo(0, 0);
+};
+$('agree').addEventListener('click', () => setAck(true));
+$('reread').addEventListener('click', e => { e.preventDefault(); setAck(false); });
+document.body.classList.toggle('acked', acked);
+
+/* ---------- 路線卡 ---------- */
+const cards = ROUTES.map(r => {
+  const el = document.createElement('div');
+  el.className = 'route';
+  // 主程式的 ?gpx= 是相對主頁抓檔，所以路徑要帶 act1/
+  el.innerHTML = `
+    <div class="name">${r.name}</div>
+    <div class="meta">${r.desc}</div>
+    <div class="state">檢查中…</div>
+    <div class="btns">
+      <button class="dl">下載</button>
+      <a class="go" href="../?gpx=act1/${r.file}">開啟</a>
+    </div>`;
+  $('routes').appendChild(el);
+  const dl = el.querySelector('.dl');
+  dl.addEventListener('click', async () => {
+    dl.disabled = true; dl.textContent = '下載中…';
+    try { await cacheRoute(r.file); dl.textContent = '已下載'; }
+    catch(e){ dl.textContent = '下載失敗，再試一次'; dl.disabled = false; }
+    refresh();
+  });
+  return { r, el, state: el.querySelector('.state'), dl };
+});
+
+/* ---------- 下載：直接寫進 SW 用的同一個 cache ----------
+   順便把主程式本體也放進去，只逛過入口頁的人到了山上也開得起來。 */
+const CORE = ['../', '../index.html', '../manifest.webmanifest', '../icon.svg', '../icon-maskable.svg'];
+async function cacheRoute(file){
+  const c = await caches.open(CACHE);
+  await c.addAll(CORE).catch(()=>{});
+  await c.add(file);
+}
+
+/* ---------- 前後狀態：哪幾條已經進了離線快取、主程式目前載入的是哪一條 ----------
+   主程式讀過的 GPX 會由 Service Worker 存進 Cache；這裡直接查 Cache API，
+   不必等 SW 接管。目前載入的軌跡則存在 localStorage 的 gpsarrow.track，name
+   就是當初的 ?gpx= 值（act1/xxx.gpx）。 */
+async function cached(file){
+  try {
+    const hit = await caches.match(new URL(file, location.href).href, { ignoreSearch:true });
+    return !!hit;
+  } catch(e){ return false; }
+}
+function currentTrack(){
+  try {
+    const o = JSON.parse(localStorage.getItem('gpsarrow.track') || 'null');
+    return o && o.name ? { name:o.name, at:o.at } : null;
+  } catch(e){ return null; }
+}
+async function refresh(){
+  const cur = currentTrack();
+  for (const c of cards){
+    const isCur = cur && cur.name.endsWith(c.r.file);
+    const ok = await cached(c.r.file);
+    c.state.className = 'state' + (isCur ? ' now' : ok ? ' ok' : '');
+    if (isCur){
+      const mins = Math.round((Date.now() - (cur.at||Date.now()))/60000);
+      const when = mins < 60 ? `${mins} 分鐘前` : (mins < 1440 ? `${Math.round(mins/60)} 小時前` : `${Math.round(mins/1440)} 天前`);
+      c.state.textContent = `● 主程式目前載入的路線（${when}）` + (ok ? '・已可離線' : '');
+    }
+    else c.state.textContent = ok ? '✓ 已下載，可離線使用' : '尚未下載：按「下載」存進手機，山區沒訊號也開得起來';
+    if (ok){ c.dl.textContent = '已下載'; c.dl.disabled = true; }
+  }
+}
+refresh();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
+// 從主程式按「返回」回來多半是 bfcache 還原，不會重跑腳本，靠 pageshow 補刷新
+window.addEventListener('pageshow', refresh);
+
+/* ---------- 離線：註冊主程式的 Service Worker（scope 為上一層） ---------- */
+if ('serviceWorker' in navigator && location.protocol !== 'file:'){
+  window.addEventListener('load', () => navigator.serviceWorker.register('../sw.js').catch(()=>{}));
+  // 快取先回舊版、背景抓到新版時 SW 會通知；入口頁沒有騎乘狀態，直接重載一次即可
+  navigator.serviceWorker.addEventListener('message', ev => {
+    if (!ev.data || ev.data.type !== 'gpsarrow-updated') return;
+    try {
+      if (sessionStorage.getItem('gpsarrow.act1.reloaded')) return;
+      sessionStorage.setItem('gpsarrow.act1.reloaded', '1');
+    } catch(e){}
+    location.reload();
+  });
+}
+$('ver').textContent = '入口頁版本 260919c';
+})();
+</script>
+</body>
+</html>
