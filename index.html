@@ -609,6 +609,7 @@ const TURN_SCAN     = 300;  // 往前取樣總長，需容納得下提示距離�
 //   0.2126×167 + 0.7152×255 + 0.0722×167 = 229.9
 // 左轉維持白色，兩者在暗藍底上都夠亮。
 const TURN_R_COLOR  = '#a7ffa7';
+const REF_R         = 50;   // 下格比例參考圓的半徑（公尺）
 
 // 實測的坑：GPX 是 GPS 錄的，本身就帶雜訊。用單一短弦線算方位時，
 // ±3 m 的橫向雜訊就會造成 ±30° 的方位誤差，直線路段誤報連連。
@@ -917,6 +918,19 @@ function drawMap(){
     ctx.setLineDash([]);
     ctx.fillText(Math.round(d) + ' m', W-10, y - 4);
   });
+
+  // 比例參考圓：固定 50 m 半徑，顯示範圍變了它在畫面上就跟著縮放，
+  // 看大小就知道比例，不必讀刻度數字。細實線、比刻度更淡，右上標「50 m」。
+  // 範圍不到 50 m 時圓比畫面大，不畫；門檻剛好 50 m 時與門檻圈重疊，只畫門檻圈。
+  if (REF_R < rng && S.thr !== REF_R){
+    ctx.strokeStyle = tinted ? 'rgba(255,255,255,.22)' : '#2a2a2a';
+    ctx.fillStyle   = tinted ? 'rgba(255,255,255,.55)' : '#484848';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, REF_R*scale, 0, Math.PI*2); ctx.stroke();
+    const a = -Math.PI/4;                                   // 右上 45°
+    ctx.textAlign = 'left';
+    ctx.fillText(REF_R + ' m', cx + REF_R*scale*Math.cos(a) + 4, cy + REF_R*scale*Math.sin(a) - 2);
+  }
 
   // 偏離門檻圈。門檻比視野還遠時（例如 30 m 視野配 40 m 門檻），圓圈
   // 整個落在格子外，畫出來只剩一道撐滿畫面的弧線，沒有資訊，此時不畫。
