@@ -629,8 +629,6 @@ function trackBearingAt(d){
 }
 function turnAhead(from, holding){
   if (S.total - from < 20) return null;
-  const minDeg = holding ? TURN_HOLD_MIN : TURN_MIN;
-  const maxDeg = holding ? TURN_HOLD_MAX : TURN_MAX;
   // 已在提示中：距離不隨減速縮回去，否則下坡煞車進彎，提示會先熄再亮、響兩次
   const span = holding ? Math.max(turnSpan(), S.turnSpan) : turnSpan();
 
@@ -667,7 +665,12 @@ function turnAhead(from, holding){
     const dist = r.start*TURN_STEP;
     if (dist > span) break;
     const a = Math.abs(r.sum);
-    if (a >= minDeg && a <= maxDeg){
+    // 放寬的門檻只給「正在提示的那個彎」（彎尾落在已記錄的彎尾附近）；
+    // 更前面的彎仍用嚴格門檻，否則 25–57° 的小擺動會先被當成下一個彎顯示，
+    // 過了彎尾又消失。
+    const held = holding && from + (r.end+1)*TURN_STEP <= S.turnEnd + 15;
+    const lo = held ? TURN_HOLD_MIN : TURN_MIN, hi = held ? TURN_HOLD_MAX : TURN_MAX;
+    if (a >= lo && a <= hi){
       // end：彎尾的沿軌里程，接近與過彎期間都不變，用來辨識「是不是同一個彎」
       return {deg: r.sum, dir: r.sum > 0 ? 'R' : 'L', dist, end: from + (r.end+1)*TURN_STEP};
     }
